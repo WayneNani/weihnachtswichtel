@@ -13,8 +13,6 @@
 //! - [`draw`]: `ρ`, `σ_t` and unbiased sampling (Spec §7.2, §8)
 //! - [`reveal`]: self-draw vector, reveals, choice of `t*`, result (Spec §9)
 
-// Phase 0 skeleton: bodies are `todo!()`. Remove this allow once implemented (agent A1).
-#![allow(unused_variables)]
 #![forbid(unsafe_code)]
 
 pub mod dcnet;
@@ -23,6 +21,7 @@ pub mod gk;
 pub mod keys;
 pub mod reveal;
 pub mod roster;
+mod util;
 pub mod wordlist;
 
 /// Minimum number of participants to start a draw (Spec §2).
@@ -78,7 +77,7 @@ pub struct GroupId(pub [u8; 16]);
 pub struct Pid(pub [u8; 16]);
 
 /// All errors of this crate. Variants must not carry secret data or positions.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
     #[error("invalid length")]
     InvalidLength,
