@@ -1,2 +1,5 @@
+# getrandom 0.4 selects the Web Crypto backend through the `wasm_js` feature alone (enabled for
+# wasm32 in wichtel-core and wichtel-wasm); this cfg was required by getrandom 0.3 and is kept as
+# a harmless fallback.
 [target.wasm32-unknown-unknown]
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

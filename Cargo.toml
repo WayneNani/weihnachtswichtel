@@ -69,5 +69,16 @@ lto = "thin"
 codegen-units = 4
 strip = true
 
-[profile.release.package.wichtel-wasm]
-opt-level = "z"
+# Browser build of wichtel-wasm (scripts/build-wasm.sh); only ever used with
+# `--target wasm32-unknown-unknown -p wichtel-wasm`. opt-level chosen by measurement
+# (README "WASM bauen"): 2 builds the role vector 5× faster than "s" (11× faster than "z")
+# for +12 KB gzip; 3 is no faster than 2 and larger.
+[profile.wasm-release]
+inherits = "release"
+opt-level = 2
+lto = true
+codegen-units = 1
+panic = "abort"
+# Keep the `target_features` section for wasm-bindgen; scripts/build-wasm.sh removes the
+# name/producers sections with wasm-bindgen instead.
+strip = false
