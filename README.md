@@ -14,6 +14,75 @@ Dokumentation:
 | `docs/04-protokoll-spec.md` | **normative** Protokoll-Spezifikation |
 | `docs/api.md` | HTTP-API |
 | `docs/analysis/` | Leck-Analysen zur Auslosung |
+| `deploy/README.md` | Betrieb: Container, Caddy, Umgebungsvariablen, Backups, Updates |
+
+## Schnellstart
+
+Lokal (Rust stable, Node.js 22):
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.130 --locked   # exakt die Version aus Cargo.lock
+scripts/build-all.sh                                        # WASM → web/dist → wichtel-server
+cargo run -p wichtel-server                                 # http://127.0.0.1:8080
+```
+
+Mit Docker (baut alles im Container, Daten im Volume `/data`):
+
+```bash
+docker build -t wichtel .
+docker run --rm -p 127.0.0.1:8080:8080 -v wichtel-data:/data wichtel
+```
+
+Nur die UI ohne Rust (Mock-Server, keine echte Kryptographie): `cd web && npm ci && npm run dev:mock`.
+
+## Betrieb
+
+Siehe **`deploy/README.md`**: Container (`Dockerfile`, non-root, Healthcheck auf `/api/health`),
+Reverse Proxy mit TLS und ohne Access-Logs (`deploy/Caddyfile`), alle `WICHTEL_*`-Variablen,
+VAPID-Schlüssel, Volume, Backups (besser keine – gelöschte Runden leben sonst darin weiter) und
+Updates. Vor dem öffentlichen Betrieb `web/public/impressum.html` und
+`web/public/datenschutz.html` ausfüllen (Vorlagen mit Platzhaltern) und neu bauen. Das
+Release-Binary (`scripts/build-all.sh --release`, gestrippt, inkl. UI und WASM) ist ≈ 22 MiB groß.
+
+## Sicherheitsmodell in 5 Sätzen
+
+1. Titel, Namen, Wunschzettel und Hinweise werden im Browser verschlüsselt, der Schlüssel steht
+   nur im URL-Fragment; der Server speichert Chiffretexte, Public Keys, Hashes, Zeitstempel und
+   den Verlosungstermin, keine IP-Adressen.
+2. Die Zuordnung entsteht in einem gemeinsamen Protokoll der Browser (anonyme Rollen per DC-Netz,
+   Enthüllung per HPKE): Jeder erfährt nur seinen eigenen Beschenkten, weder Server noch
+   Spielleiter erfahren die Zuordnung – unter der Annahme eines *ehrlichen, aber neugierigen*
+   Servers.
+3. Ein **aktiv bösartiger Server** (oder wer ihn übernimmt) kann manipuliertes JavaScript/WASM
+   ausliefern und damit alles mitlesen – eine Grenze jeder Browser-E2E-Anwendung; deshalb darf der
+   **Spielleiter nicht der Betreiber** des Servers sein.
+4. Beitreten kann jeder mit dem Einladungslink, auch mehrfach: Mit genug **Sybils** (Fake-
+   Teilnehmern, n − 2 reichen) ist die Anonymität weg, das verhindert keine Kryptographie – die
+   Teilnehmerliste muss vor dem Start von Menschen geprüft werden.
+5. In **kleinen Gruppen** verrät schon das eigene Ergebnis durch Abzählen viel (bei n = 4 lässt
+   sich oft einiges ausschließen, deshalb n ≥ 4 und ein Hinweis bis n = 5), und Metadaten wie
+   Teilnehmerzahl, Zeitpunkte und – bei eingeschalteten Benachrichtigungen – der Push-Dienst des
+   Browserherstellers bleiben sichtbar; ein Störer kann die Verlosung blockieren, aber nichts
+   herausfinden.
+
+Details: `docs/01-konzept.md` §3 und §6.7, `docs/02-review.md`.
+
+## Tests
+
+| Befehl | Prüft |
+|---|---|
+| `cargo test -p <crate>` | Kern (Testvektoren, Protokoll-Simulation, Leck- und Verteilungstests), API-DTOs, Server (HTTP-API und Protokoll gegen echte Turso-Datei, Push) |
+| `cd web && npm run typecheck && npm test` | TypeScript-Typen; Protokoll-Treiber, Link-Fragment und QR-Code gegen Mock |
+| `node scripts/test-wasm.mjs` | gebautes WASM: Testvektoren, Fehlercodes, Verlosungen n = 4, Laufzeiten |
+| `node scripts/smoke.mjs` | echter Server + echtes WASM, 4 Clients über HTTP (auch gegen das Release-Binary: `WICHTEL_SERVER=…/release/wichtel-server`) |
+| `scripts/e2e.sh` | Browser-E2E mit Playwright/Chromium (siehe unten), ≈ 1,5 min |
+
+Die CI (`.github/workflows/ci.yml`) führt alles davon aus: `rust` (fmt, clippy, Tests je Crate),
+`web` (Typecheck, Tests, Build), `build` (wasm32-Check, `build-all.sh`, `test-wasm.mjs`,
+`smoke.mjs`) und `e2e` als eigenen Job. Die Werkzeuge (wasm32-Target, `wasm-bindgen-cli` in der
+Version aus `Cargo.lock` als vorkompiliertes Binary, Node 22) richtet
+`.github/actions/setup-build` ein; Cargo und npm werden gecacht.
 
 ## Struktur
 
@@ -22,7 +91,8 @@ crates/wichtel-core     Protokoll & Krypto (kein I/O), nativ + wasm32
 crates/wichtel-api      DTOs der HTTP-API
 crates/wichtel-wasm     wasm-bindgen-Hülle für den Browser
 crates/wichtel-server   axum-Server, Turso (lokal), Ablauf-Job, Web-Push
-web/                    TypeScript-UI (Preact, esbuild)
+web/                    TypeScript-UI (Preact, esbuild); web/public: statische Seiten (Impressum, Datenschutz)
+deploy/                 Betrieb: Caddyfile-Beispiel, Doku (Dockerfile im Wurzelverzeichnis)
 ```
 
 ## Bauen
