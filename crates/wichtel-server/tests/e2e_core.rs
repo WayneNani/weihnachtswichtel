@@ -255,7 +255,6 @@ fn db_contains(path: &str, needle: &[u8]) -> bool {
 }
 
 #[tokio::test]
-#[ignore = "needs wichtel-core"]
 async fn e2e_four_and_seven_participants() {
     for names in [
         &["Anna", "Ben", "Clara", "David"][..],
@@ -288,7 +287,6 @@ async fn e2e_four_and_seven_participants() {
 }
 
 #[tokio::test]
-#[ignore = "needs wichtel-core"]
 async fn e2e_leave_after_result_triggers_new_draw() {
     let t = TestApp::with(test_config(), Arc::new(CoreOps), &temp_db_path("e2e-leave")).await;
     let (gid, gid_s, admin, _gk, mut clients) =
@@ -319,7 +317,6 @@ async fn e2e_leave_after_result_triggers_new_draw() {
 }
 
 #[tokio::test]
-#[ignore = "needs wichtel-core"]
 async fn e2e_rejects_forged_uploads() {
     let t = TestApp::with(test_config(), Arc::new(CoreOps), &temp_db_path("e2e-forge")).await;
     let (gid, gid_s, admin, _gk, clients) = setup(&t, &["A", "B", "C", "D"]).await;
