@@ -1,0 +1,73 @@
+# Beispiel-Caddyfile für Weihnachtswichtel (Caddy ≥ 2.8). Betrieb: deploy/README.md.
+#
+# - TLS automatisch über ACME (Let's Encrypt/ZeroSSL), sobald die Domain auf den Host zeigt.
+# - Keine Access-Logs: Caddy schreibt Zugriffslogs nur, wenn ein `log`-Block im Site-Block steht.
+#   Der steht hier bewusst nicht (Konzept §7.5: keine IP-Adressen in Logs).
+# - Caddy setzt `X-Forwarded-For` selbst auf die IP des Clients und übernimmt keine vom Client
+#   mitgeschickten Werte (keine `trusted_proxies` konfiguriert). Deshalb den wichtel-server mit
+#   WICHTEL_TRUST_PROXY=1 starten – sonst gelten die Rate-Limits für alle Nutzer gemeinsam (die IP
+#   des Proxys). Und nur dann: Ist der wichtel-server direkt erreichbar, könnte jeder einen
+#   beliebigen X-Forwarded-For-Header schicken und die Rate-Limits umgehen. Also an 127.0.0.1 bzw.
+#   ein internes Docker-Netz binden.
+
+{
+	# Kontakt für ACME (Ablaufwarnungen der Zertifikate). Platzhalter ersetzen oder entfernen.
+	email betrieb@example.org
+
+	# Fehlerlogs von Handlern (z. B. „Upstream nicht erreichbar“) enthalten in Caddy die Anfrage
+	# samt Client-IP. Sie werden hier ausgeschlossen; der wichtel-server protokolliert eigene Fehler
+	# ohne IP. Zum Debuggen vorübergehend auskommentieren.
+	log default {
+		exclude http.log.error
+	}
+}
+
+wichteln.example.org {
+	# Kompression nur für statische Assets (WASM, JS, CSS, HTML, SVG, Manifest). Nicht für
+	# Server-Sent Events (text/event-stream, würde puffern) und nicht für API-JSON (Chiffretexte
+	# sind ohnehin nicht komprimierbar).
+	encode {
+		zstd
+		gzip 6
+		match {
+			header Content-Type application/wasm*
+			header Content-Type text/javascript*
+			header Content-Type text/css*
+			header Content-Type text/html*
+			header Content-Type image/svg+xml*
+			header Content-Type application/manifest+json*
+		}
+	}
+
+	header {
+		# HSTS: ein Jahr. `includeSubDomains`/`preload` nur, wenn alle Subdomains HTTPS können.
+		Strict-Transport-Security "max-age=31536000"
+		# Server-Version nicht verraten. Alle übrigen Sicherheits-Header (CSP, Referrer-Policy,
+		# X-Frame-Options, …) setzt der wichtel-server selbst.
+		-Server
+	}
+
+	reverse_proxy 127.0.0.1:8080 {
+		# Server-Sent Events (/api/groups/{gid}/events) sofort durchreichen.
+		flush_interval -1
+	}
+
+	# Falls doch Zugriffslogs nötig sind: nur ohne IP, Port, Pfad (enthält die Gruppen-ID) und
+	# Header, und kurz aufbewahren.
+	# log {
+	# 	output file /var/log/caddy/wichtel-access.log {
+	# 		roll_keep_for 48h
+	# 	}
+	# 	format filter {
+	# 		request>remote_ip delete
+	# 		request>remote_port delete
+	# 		request>client_ip delete
+	# 		request>uri delete
+	# 		request>headers delete
+	# 		resp_headers delete
+	# 		wrap json
+	# 	}
+	# }
+}
+
+# Unverschlüsseltes HTTP leitet Caddy automatisch auf HTTPS um.

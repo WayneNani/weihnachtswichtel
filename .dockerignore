@@ -1,0 +1,20 @@
+# Allowlist: nur was der Build braucht (siehe Dockerfile).
+**
+
+!Cargo.toml
+!Cargo.lock
+!.cargo/
+!crates/
+!scripts/build-wasm.sh
+!web/
+
+# Build-Ausgaben und lokale Abhängigkeiten nie in den Kontext
+**/target/
+web/node_modules/
+web/dist/
+web/dist-*/
+web/src/wasm-pkg/
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/.DS_Store
