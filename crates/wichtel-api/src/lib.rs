@@ -67,7 +67,8 @@ pub enum GroupState {
     Done { round: u32, t_star: u8 },
 }
 
-/// One roster entry as served to everybody.
+/// One roster entry as served to everybody. Deliberately without a join time: it would
+/// reveal the join order behind the `pid`-sorted roster.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParticipantView {
     pub pid: PidBytes,
@@ -75,7 +76,6 @@ pub struct ParticipantView {
     pub idh: Key32,
     pub enc_name: Bin,
     pub enc_wish: Bin,
-    pub joined_at: UnixTime,
 }
 
 /// Progress of the current phase (who has uploaded). Unproblematic: reveals nothing about the draw.

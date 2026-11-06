@@ -1,5 +1,7 @@
 //! [`Store`] on an embedded, local Turso database file (Spec §14).
 
+use std::sync::Arc;
+
 use tokio::sync::Mutex;
 use turso::{Connection, Database, Value};
 use wichtel_api::Phase;
@@ -12,11 +14,19 @@ use super::{
 /// SQL migrations, applied in order; the index + 1 is the schema version.
 const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_init.sql")];
 
+/// `server_keys` row written together with every destructive commit and removed by
+/// [`Store::vacuum`]: a pending `VACUUM` survives a crash or restart.
+const VACUUM_MARKER: &str = "vacuum_pending";
+
 /// Local Turso database. All statements run on one connection guarded by a mutex: the
 /// workload is tiny, and this keeps `VACUUM`/checkpoint free of concurrently open statements.
+///
+/// Transactions are cancel-safe: [`Store::commit`] runs in a detached task that always ends
+/// with `COMMIT` or `ROLLBACK`, and every user of the connection first rolls back a
+/// transaction that was left open anyway (e.g. by a panic).
 pub struct TursoStore {
     _db: Database,
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
 }
 
 impl TursoStore {
@@ -29,7 +39,7 @@ impl TursoStore {
         let conn = db.connect()?;
         let store = Self {
             _db: db,
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
         };
         store.migrate().await?;
         Ok(store)
@@ -58,26 +68,16 @@ impl TursoStore {
             if version <= current {
                 continue;
             }
-            conn.execute("BEGIN", ()).await?;
-            let res = async {
-                conn.execute_batch(sql).await?;
-                conn.execute(
+            run_tx(&conn, async |c: &Connection| {
+                c.execute_batch(sql).await?;
+                c.execute(
                     "INSERT INTO schema_migrations (version) VALUES (?1)",
                     [Value::Integer(version)],
                 )
                 .await?;
-                Ok::<_, turso::Error>(())
-            }
-            .await;
-            match res {
-                Ok(()) => {
-                    conn.execute("COMMIT", ()).await?;
-                }
-                Err(e) => {
-                    let _ = conn.execute("ROLLBACK", ()).await;
-                    return Err(e.into());
-                }
-            }
+                Ok(())
+            })
+            .await?;
         }
         Ok(())
     }
@@ -88,6 +88,7 @@ impl TursoStore {
         params: Vec<Value>,
     ) -> Result<Vec<Vec<Value>>, StoreError> {
         let conn = self.conn.lock().await;
+        reset_open_tx(&conn).await?;
         let mut rows = conn.query(sql, params).await?;
         let mut out = Vec::new();
         while let Some(row) = rows.next().await? {
@@ -308,29 +309,33 @@ fn group_from_row(v: &[Value]) -> Result<GroupRecord, StoreError> {
 
 impl Store for TursoStore {
     fn commit(&self, ops: Vec<WriteOp>) -> StoreFuture<'_, ()> {
+        let conn = self.conn.clone();
         Box::pin(async move {
             if ops.is_empty() {
                 return Ok(());
             }
-            let conn = self.conn.lock().await;
-            conn.execute("BEGIN IMMEDIATE", ()).await?;
-            let mut result = Ok(());
-            for op in ops {
-                if let Err(e) = apply(&conn, op).await {
-                    result = Err(e);
-                    break;
-                }
-            }
-            match result {
-                Ok(()) => {
-                    conn.execute("COMMIT", ()).await?;
+            // Detached from the request: if the caller's future is dropped (client gone,
+            // request timeout), the transaction still runs to COMMIT or ROLLBACK.
+            tokio::spawn(async move {
+                let conn = conn.lock_owned().await;
+                let destroys = ops.iter().any(WriteOp::destroys_data);
+                run_tx(&conn, async |c: &Connection| {
+                    for op in ops {
+                        apply(c, op).await?;
+                    }
+                    if destroys {
+                        c.execute(
+                            "INSERT OR REPLACE INTO server_keys (name, value) VALUES (?1, x'01')",
+                            [Value::Text(VACUUM_MARKER.into())],
+                        )
+                        .await?;
+                    }
                     Ok(())
-                }
-                Err(e) => {
-                    let _ = conn.execute("ROLLBACK", ()).await;
-                    Err(e.into())
-                }
-            }
+                })
+                .await
+            })
+            .await
+            .map_err(|_| StoreError::Aborted)?
         })
     }
 
@@ -583,15 +588,88 @@ impl Store for TursoStore {
         })
     }
 
+    fn list_empty_open(&self, cutoff: i64) -> StoreFuture<'_, Vec<Gid>> {
+        Box::pin(async move {
+            let rows = self
+                .query_all(
+                    "SELECT gid FROM groups WHERE state = 'open' AND last_activity <= ?1 \
+                     AND NOT EXISTS (SELECT 1 FROM participants p WHERE p.gid = groups.gid)",
+                    vec![Value::Integer(cutoff)],
+                )
+                .await?;
+            rows.iter().map(|v| fixed(&v[0])).collect()
+        })
+    }
+
+    fn needs_vacuum(&self) -> StoreFuture<'_, bool> {
+        Box::pin(async move {
+            if self.get_server_key(VACUUM_MARKER).await?.is_some() {
+                return Ok(true);
+            }
+            let rows = self.query_all("PRAGMA freelist_count", vec![]).await?;
+            let n = rows.first().map(|r| int(&r[0])).transpose()?.unwrap_or(0);
+            Ok(n > 0)
+        })
+    }
+
     fn vacuum(&self) -> StoreFuture<'_, ()> {
         Box::pin(async move {
             let conn = self.conn.lock().await;
+            reset_open_tx(&conn).await?;
             conn.execute("VACUUM", ()).await?;
+            // Only after a successful VACUUM (a crash in between just repeats it at the next
+            // start); the residue of this delete is the marker itself, nothing personal.
+            conn.execute(
+                "DELETE FROM server_keys WHERE name = ?1",
+                [Value::Text(VACUUM_MARKER.into())],
+            )
+            .await?;
             let mut rows = conn.query("PRAGMA wal_checkpoint(TRUNCATE)", ()).await?;
             while rows.next().await?.is_some() {}
             Ok(())
         })
     }
+}
+
+/// Roll back a transaction that is still open on `conn` (left behind by a panic or an
+/// earlier failure), so it cannot block every later write.
+async fn reset_open_tx(conn: &Connection) -> Result<(), turso::Error> {
+    if !conn.is_autocommit()? {
+        tracing::warn!("rolling back a transaction that was left open");
+        conn.execute("ROLLBACK", ()).await?;
+    }
+    Ok(())
+}
+
+/// `ROLLBACK` if a transaction is open; errors are only logged.
+async fn rollback_quietly(conn: &Connection) {
+    if conn.is_autocommit().unwrap_or(false) {
+        return;
+    }
+    if let Err(e) = conn.execute("ROLLBACK", ()).await {
+        tracing::error!(error = %e, "rollback failed");
+    }
+}
+
+/// `BEGIN IMMEDIATE`, `body`, `COMMIT`. On any error – including a failed `BEGIN` or
+/// `COMMIT` – the transaction is rolled back, so the connection stays usable.
+async fn run_tx<F>(conn: &Connection, body: F) -> Result<(), StoreError>
+where
+    F: AsyncFnOnce(&Connection) -> Result<(), turso::Error>,
+{
+    reset_open_tx(conn).await?;
+    let res = async {
+        conn.execute("BEGIN IMMEDIATE", ()).await?;
+        body(conn).await?;
+        conn.execute("COMMIT", ()).await?;
+        Ok::<_, turso::Error>(())
+    }
+    .await;
+    if let Err(e) = res {
+        rollback_quietly(conn).await;
+        return Err(e.into());
+    }
+    Ok(())
 }
 
 fn blob(b: &[u8]) -> Value {
@@ -648,5 +726,131 @@ fn fixed<const N: usize>(v: &Value) -> Result<[u8; N], StoreError> {
             .try_into()
             .map_err(|_| StoreError::Corrupt("blob length")),
         _ => Err(StoreError::Corrupt("expected blob")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_path(name: &str) -> String {
+        let mut p = std::env::temp_dir();
+        p.push(format!("wichtel-unit-{name}-{}.db", std::process::id()));
+        let s = p.to_string_lossy().into_owned();
+        remove(&s);
+        s
+    }
+
+    fn remove(path: &str) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{path}{suffix}"));
+        }
+    }
+
+    fn key(name: &str, v: u8) -> WriteOp {
+        WriteOp::PutServerKey {
+            name: name.into(),
+            value: vec![v; 8],
+        }
+    }
+
+    /// A transaction left open on the connection (e.g. by a panicking task) is rolled back
+    /// before the next commit instead of blocking every write until a restart.
+    #[tokio::test]
+    async fn leftover_transaction_is_rolled_back() {
+        let path = temp_path("leftover");
+        let store = TursoStore::open(&path).await.unwrap();
+        {
+            let conn = store.conn.lock().await;
+            conn.execute("BEGIN IMMEDIATE", ()).await.unwrap();
+            conn.execute(
+                "INSERT INTO server_keys (name, value) VALUES ('ghost', x'00')",
+                (),
+            )
+            .await
+            .unwrap();
+            assert!(!conn.is_autocommit().unwrap());
+        }
+        store.commit(vec![key("a", 1)]).await.unwrap();
+        assert_eq!(store.get_server_key("a").await.unwrap(), Some(vec![1; 8]));
+        assert_eq!(store.get_server_key("ghost").await.unwrap(), None);
+        drop(store);
+        remove(&path);
+    }
+
+    /// Destructive commits leave a persistent marker until the next VACUUM.
+    #[tokio::test]
+    async fn vacuum_marker_is_persistent() {
+        let path = temp_path("marker");
+        let store = TursoStore::open(&path).await.unwrap();
+        store.commit(vec![key("a", 1)]).await.unwrap();
+        assert!(!store.needs_vacuum().await.unwrap());
+        store
+            .commit(vec![WriteOp::DeletePushSub {
+                gid: [1; 16],
+                pid: [2; 16],
+            }])
+            .await
+            .unwrap();
+        assert!(store.needs_vacuum().await.unwrap());
+        drop(store);
+        let store = TursoStore::open(&path).await.unwrap();
+        assert!(store.needs_vacuum().await.unwrap(), "survives a restart");
+        store.vacuum().await.unwrap();
+        assert!(!store.needs_vacuum().await.unwrap());
+        drop(store);
+        remove(&path);
+    }
+
+    /// A failing statement or a failing `COMMIT` rolls back; the next commit works.
+    #[tokio::test]
+    async fn failed_statement_or_commit_rolls_back() {
+        let path = temp_path("failcommit");
+        let store = TursoStore::open(&path).await.unwrap();
+        let conn = store.conn.lock().await;
+        let res = run_tx(&conn, async |c: &Connection| {
+            c.execute(
+                "INSERT INTO server_keys (name, value) VALUES ('x', x'01')",
+                (),
+            )
+            .await?;
+            c.execute("INSERT INTO no_such_table VALUES (1)", ())
+                .await?;
+            Ok(())
+        })
+        .await;
+        assert!(res.is_err());
+        assert!(conn.is_autocommit().unwrap(), "transaction closed");
+
+        // Deferred foreign key violation: only the COMMIT statement fails.
+        conn.execute("PRAGMA foreign_keys = ON", ()).await.unwrap();
+        conn.execute_batch(
+            "CREATE TABLE fk_parent (id INTEGER PRIMARY KEY); \
+             CREATE TABLE fk_child (p INTEGER REFERENCES fk_parent(id) \
+             DEFERRABLE INITIALLY DEFERRED);",
+        )
+        .await
+        .unwrap();
+        let res = run_tx(&conn, async |c: &Connection| {
+            c.execute(
+                "INSERT INTO server_keys (name, value) VALUES ('y', x'01')",
+                (),
+            )
+            .await?;
+            c.execute("INSERT INTO fk_child (p) VALUES (42)", ())
+                .await?;
+            Ok(())
+        })
+        .await;
+        assert!(res.is_err(), "COMMIT must fail");
+        assert!(conn.is_autocommit().unwrap(), "transaction closed");
+        drop(conn);
+
+        store.commit(vec![key("z", 3)]).await.unwrap();
+        assert_eq!(store.get_server_key("x").await.unwrap(), None);
+        assert_eq!(store.get_server_key("y").await.unwrap(), None);
+        assert_eq!(store.get_server_key("z").await.unwrap(), Some(vec![3; 8]));
+        drop(store);
+        remove(&path);
     }
 }

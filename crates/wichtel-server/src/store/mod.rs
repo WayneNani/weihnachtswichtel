@@ -27,6 +27,8 @@ pub enum StoreError {
     Db(#[from] turso::Error),
     #[error("corrupt row: {0}")]
     Corrupt(&'static str),
+    #[error("database task aborted")]
+    Aborted,
 }
 
 /// One group row.
@@ -146,6 +148,29 @@ pub enum WriteOp {
     },
 }
 
+impl WriteOp {
+    /// Whether the operation deletes or overwrites stored data, whose old bytes may survive
+    /// in the file until the next `VACUUM` (Spec §14).
+    pub fn destroys_data(&self) -> bool {
+        match self {
+            // Group rows are rewritten with the same ciphertext; only state fields change.
+            WriteOp::UpsertGroup(_)
+            | WriteOp::InsertParticipant(_)
+            | WriteOp::PutRevealCiphertexts { .. }
+            | WriteOp::PutServerKey { .. } => false,
+            WriteOp::DeleteGroup(_)
+            | WriteOp::UpdateParticipantData { .. }
+            | WriteOp::DeleteParticipant { .. }
+            | WriteOp::PutAggregate(_)
+            | WriteOp::KeepOnlyAttempt { .. }
+            | WriteOp::ClearRounds { .. }
+            | WriteOp::PutPushSub(_)
+            | WriteOp::DeletePushSub { .. }
+            | WriteOp::DeletePushSubIfEndpoint { .. } => true,
+        }
+    }
+}
+
 /// Persistence interface.
 pub trait Store: Send + Sync + 'static {
     /// Apply all operations in one transaction.
@@ -187,6 +212,14 @@ pub trait Store: Send + Sync + 'static {
     /// Open groups without `draw_at` whose last activity is at or before `cutoff`, with their
     /// participant count.
     fn list_idle_open(&self, cutoff: i64) -> StoreFuture<'_, Vec<(Gid, u64)>>;
+    /// Open groups without any participant whose last activity is at or before `cutoff`.
+    fn list_empty_open(&self, cutoff: i64) -> StoreFuture<'_, Vec<Gid>>;
+
+    /// Whether deleted or overwritten data may still be in the file: a commit with a
+    /// destructive [`WriteOp`] since the last [`Store::vacuum`] (recorded persistently in the
+    /// same transaction, so it survives a crash or restart) or free pages
+    /// (`PRAGMA freelist_count`).
+    fn needs_vacuum(&self) -> StoreFuture<'_, bool>;
 
     /// Compact the database so deleted data does not survive in free pages or the WAL
     /// (Spec §14: `VACUUM` + `wal_checkpoint(TRUNCATE)`).

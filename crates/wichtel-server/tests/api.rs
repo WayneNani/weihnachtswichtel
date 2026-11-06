@@ -887,10 +887,13 @@ async fn expiry_and_unused_groups_are_deleted() {
     let t = TestApp::new().await;
     // Expires via delete_after (T0 + 30 days).
     let (g_exp, _) = group_with(&t, 4).await;
-    // Unused: open, no participants.
+    // Unused: open, fewer than N_MIN participants (groups without any participant are
+    // already deleted after 24 h, see tests/hardening.rs).
     let g_idle = create_group(&t, None).await;
+    join(&t, &g_idle, &FakeClient::new(&g_idle.gid, 1)).await;
     // Unused but with a future draw date: kept.
     let g_sched = create_group(&t, Some(T0 + 20 * 86_400)).await;
+    join(&t, &g_sched, &FakeClient::new(&g_sched.gid, 1)).await;
 
     t.clock.advance(7 * 86_400 - 10);
     t.app.run_jobs().await;

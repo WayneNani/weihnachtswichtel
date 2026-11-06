@@ -4,11 +4,14 @@
 //! - Every push is an empty `POST` with `TTL` and `Authorization: vapid t=<JWT>, k=<key>`
 //!   (RFC 8292, ES256). No payload, hence no encryption and no personal content.
 //! - Fan-out goes to *all* subscribers of a group at once; 404/410 ⇒ subscription deleted.
+//! - At most one fan-out per group and `push_min_interval`; notifications in between are
+//!   merged into one delayed fan-out (pushes carry no content, so the latest state wins).
 //! - Delivery runs in a background queue with timeouts; failures are ignored.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -82,11 +85,13 @@ impl Vapid {
     /// `Authorization` header value for a push to `endpoint` (RFC 8292 §3).
     pub fn authorization(&self, endpoint: &Url, now: i64) -> String {
         let header = URL_SAFE_NO_PAD.encode(br#"{"typ":"JWT","alg":"ES256"}"#);
-        let claims = serde_json::json!({
+        let mut claims = serde_json::json!({
             "aud": endpoint.origin().ascii_serialization(),
             "exp": now + JWT_LIFETIME,
-            "sub": self.subject,
         });
+        if !self.subject.is_empty() {
+            claims["sub"] = self.subject.clone().into();
+        }
         let claims = URL_SAFE_NO_PAD.encode(claims.to_string());
         let signing_input = format!("{header}.{claims}");
         let sig: Signature = self.key.sign(signing_input.as_bytes());
@@ -99,7 +104,9 @@ impl Vapid {
 }
 
 /// Check a subscription endpoint: HTTPS, ≤ 1024 chars, DNS host on the allow list
-/// (no IP literals, no localhost – the server must not become an SSRF relay).
+/// (no IP literals, no localhost – the server must not become an SSRF relay). The allow list
+/// holds explicit host suffixes only; a wildcard is rejected by the configuration, so no
+/// endpoint can point to an attacker-chosen host (or one resolving to a private address).
 pub fn validate_endpoint(endpoint: &str, allowed_hosts: &[String]) -> Result<Url, &'static str> {
     if endpoint.len() > 1024 {
         return Err("endpoint too long");
@@ -121,7 +128,7 @@ pub fn validate_endpoint(endpoint: &str, allowed_hosts: &[String]) -> Result<Url
     }
     let ok = allowed_hosts
         .iter()
-        .any(|suffix| suffix == "*" || host == *suffix || host.ends_with(&format!(".{suffix}")));
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")));
     if !ok {
         return Err("push service not allowed");
     }
@@ -202,27 +209,58 @@ impl PushClient for ReqwestPushClient {
     }
 }
 
-/// Queue for group-wide fan-outs. Notifications for a group that is already queued are merged.
+/// Queue for group-wide fan-outs. Notifications for a group that is already queued (or
+/// waiting for its rate limit) are merged.
 pub struct PushDispatcher {
     tx: mpsc::Sender<Gid>,
     pending: Arc<Mutex<HashSet<Gid>>>,
 }
 
+/// Collaborators of the delivery worker.
+pub struct PushWorker {
+    pub store: Arc<dyn Store>,
+    pub vapid: Arc<Vapid>,
+    pub client: Arc<dyn PushClient>,
+    pub clock: Arc<dyn Clock>,
+    /// Minimum time between two fan-outs of the same group.
+    pub min_interval: Duration,
+    /// Set when gone subscriptions were deleted (bundled `VACUUM`).
+    pub vacuum_pending: Arc<AtomicBool>,
+}
+
 impl PushDispatcher {
-    /// Start the delivery worker.
-    pub fn spawn(
-        store: Arc<dyn Store>,
-        vapid: Arc<Vapid>,
-        client: Arc<dyn PushClient>,
-        clock: Arc<dyn Clock>,
-    ) -> Self {
+    /// Start the delivery worker. It ends when the dispatcher is dropped.
+    pub fn spawn(w: PushWorker) -> Self {
         let (tx, mut rx) = mpsc::channel::<Gid>(QUEUE_CAPACITY);
         let pending: Arc<Mutex<HashSet<Gid>>> = Arc::default();
         let pending2 = pending.clone();
+        // Weak: delayed re-queues must not keep the worker alive.
+        let requeue = tx.downgrade();
         tokio::spawn(async move {
+            let mut last: HashMap<Gid, tokio::time::Instant> = HashMap::new();
             while let Some(gid) = rx.recv().await {
+                let now = tokio::time::Instant::now();
+                last.retain(|_, t| now.duration_since(*t) < w.min_interval);
+                if let Some(t) = last.get(&gid) {
+                    // Too early: deliver once the interval has passed. The gid stays in
+                    // `pending`, so further notifications are merged into this one.
+                    let at = *t + w.min_interval;
+                    let requeue = requeue.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep_until(at).await;
+                        if let Some(tx) = requeue.upgrade() {
+                            let _ = tx.send(gid).await;
+                        }
+                    });
+                    continue;
+                }
                 pending2.lock().expect("pending lock").remove(&gid);
-                fan_out(&*store, &vapid, &client, clock.now(), gid).await;
+                if !w.min_interval.is_zero() {
+                    last.insert(gid, now);
+                }
+                if fan_out(&*w.store, &w.vapid, &w.client, w.clock.now(), gid).await {
+                    w.vacuum_pending.store(true, Ordering::SeqCst);
+                }
             }
         });
         Self { tx, pending }
@@ -241,18 +279,19 @@ impl PushDispatcher {
     }
 }
 
+/// Push to every subscriber of `gid`; `true` if gone subscriptions were deleted.
 async fn fan_out(
     store: &dyn Store,
     vapid: &Vapid,
     client: &Arc<dyn PushClient>,
     now: i64,
     gid: Gid,
-) {
+) -> bool {
     let subs = match store.list_push_subs(&gid).await {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(error = %e, "push: cannot list subscriptions");
-            return;
+            return false;
         }
     };
     let mut tasks = tokio::task::JoinSet::new();
@@ -278,10 +317,15 @@ async fn fan_out(
             });
         }
     }
-    if !gone.is_empty()
-        && let Err(e) = store.commit(gone).await
-    {
-        tracing::warn!(error = %e, "push: cannot delete gone subscriptions");
+    if gone.is_empty() {
+        return false;
+    }
+    match store.commit(gone).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "push: cannot delete gone subscriptions");
+            false
+        }
     }
 }
 
@@ -310,11 +354,14 @@ mod tests {
         assert!(validate_endpoint("https://evil.example/x", &allowed).is_err());
         assert!(validate_endpoint("https://notfcm.googleapis.com.evil/x", &allowed).is_err());
         assert!(validate_endpoint("https://user:pw@fcm.googleapis.com/x", &allowed).is_err());
-        let any = vec!["*".to_string()];
-        assert!(validate_endpoint("https://127.0.0.1/x", &any).is_err());
-        assert!(validate_endpoint("https://[::1]/x", &any).is_err());
-        assert!(validate_endpoint("https://localhost/x", &any).is_err());
-        assert!(validate_endpoint("https://push.example.org/x", &any).is_ok());
+        // "*" is no wildcard (and rejected by the configuration anyway).
+        let star = vec!["*".to_string()];
+        assert!(validate_endpoint("https://push.example.org/x", &star).is_err());
+        let custom = vec!["example.org".to_string()];
+        assert!(validate_endpoint("https://127.0.0.1/x", &custom).is_err());
+        assert!(validate_endpoint("https://[::1]/x", &custom).is_err());
+        assert!(validate_endpoint("https://localhost/x", &custom).is_err());
+        assert!(validate_endpoint("https://push.example.org/x", &custom).is_ok());
         let long = format!("https://fcm.googleapis.com/{}", "a".repeat(1024));
         assert!(validate_endpoint(&long, &allowed).is_err());
     }

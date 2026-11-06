@@ -4,15 +4,16 @@ use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
-use axum::body::Bytes;
-use axum::extract::rejection::{BytesRejection, JsonRejection, PathRejection};
+use axum::body::{Body, Bytes};
+use axum::extract::rejection::{JsonRejection, PathRejection};
 use axum::extract::{
     ConnectInfo, DefaultBodyLimit, FromRequest, FromRequestParts, Path, Request, State,
 };
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
-use axum::response::Response;
+use axum::middleware::Next;
 use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router, middleware};
 use base64::Engine;
@@ -20,26 +21,35 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::{Stream, StreamExt, stream};
 use serde::de::DeserializeOwned;
 use tokio::sync::broadcast::error::RecvError;
+use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 use wichtel_api::{
     CONTENT_TYPE_BINARY, CreateGroupRequest, CreateGroupResponse, ErrorCode, Fixed, GroupView,
-    HEADER_SIGNATURE, JoinRequest, JoinResponse, PushSubscriptionRequest, RevealRelease,
+    HEADER_SIGNATURE, JoinRequest, JoinResponse, Phase, PushSubscriptionRequest, RevealRelease,
     ScheduleRequest, UpdateEvent, VapidKeyResponse,
 };
 use wichtel_core::{N_MAX, roles_vector_len};
 
 use crate::app::App;
 use crate::error::{ApiError, ApiResult};
+use crate::events::Subscription;
 use crate::web;
 
 /// Limit for JSON bodies (docs/api.md).
 pub const JSON_LIMIT: usize = 16 * 1024;
-/// Limit for role vectors: `L_V(N_MAX)`.
+/// Largest possible role vector: `L_V(N_MAX)`. Uploads are limited to the exact length for
+/// the group's current `n`, checked before the body is read.
 pub const ROLES_LIMIT: usize = roles_vector_len(N_MAX);
 
 type AppState = State<Arc<App>>;
 
 /// Build the complete router (API, static assets, middleware).
+///
+/// Outermost first: security headers, request log, global concurrency limit, overall request
+/// timeout, idle timeout for request bodies.
 pub fn router(app: Arc<App>) -> Router {
+    let hsts = app.cfg.is_https();
+    let request_timeout = app.cfg.request_timeout;
+    let body_idle_timeout = app.cfg.body_idle_timeout;
     Router::new()
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/push/vapid-key", get(vapid_key))
@@ -59,9 +69,7 @@ pub fn router(app: Arc<App>) -> Router {
         )
         .route(
             "/api/groups/{gid}/rounds/{r}/roles",
-            put(upload_roles)
-                .layer(DefaultBodyLimit::max(ROLES_LIMIT))
-                .get(get_roles),
+            put(upload_roles).get(get_roles),
         )
         .route(
             "/api/groups/{gid}/rounds/{r}/reveal",
@@ -70,9 +78,33 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/groups/{gid}/events", get(events))
         .layer(DefaultBodyLimit::max(JSON_LIMIT))
         .fallback(web::static_handler)
+        .layer(RequestBodyTimeoutLayer::new(body_idle_timeout))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            request_timeout,
+        ))
+        .layer(middleware::from_fn_with_state(
+            app.clone(),
+            limit_concurrency,
+        ))
         .layer(middleware::from_fn(web::log_requests))
-        .layer(middleware::from_fn(web::security_headers))
+        .layer(middleware::from_fn_with_state(hsts, web::security_headers))
         .with_state(app)
+}
+
+/// Global limit on requests in progress; beyond it requests are shed immediately (`503`)
+/// instead of queueing. Long-lived SSE streams hold no permit once their headers are sent
+/// (they have their own limits).
+async fn limit_concurrency(State(app): AppState, req: Request, next: Next) -> Response {
+    let Ok(_permit) = app.inflight.clone().try_acquire_owned() else {
+        let mut res =
+            ApiError::new(ErrorCode::TooManyRequests, "server busy, try again").into_response();
+        *res.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+        res.headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+        return res;
+    };
+    next.run(req).await
 }
 
 // ---------------------------------------------------------------- extractors & parsing
@@ -145,23 +177,55 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for JsonBody<T> {
     }
 }
 
-/// Raw binary body with JSON errors.
-pub struct RawBody(pub Bytes);
+fn too_large() -> ApiError {
+    ApiError::new(ErrorCode::PayloadTooLarge, "body too large")
+}
 
-impl<S: Send + Sync> FromRequest<S> for RawBody {
-    type Rejection = ApiError;
-
-    async fn from_request(req: Request, state: &S) -> Result<Self, ApiError> {
-        Bytes::from_request(req, state)
-            .await
-            .map(RawBody)
-            .map_err(|rej: BytesRejection| match rej.status() {
-                StatusCode::PAYLOAD_TOO_LARGE => {
-                    ApiError::new(ErrorCode::PayloadTooLarge, "body too large")
-                }
-                _ => ApiError::bad_request("cannot read body"),
-            })
+/// Read a binary upload body of at most `limit` bytes. Only called after the request was
+/// authorized, so unauthenticated clients cannot make the server buffer large bodies.
+async fn read_body(body: Body, limit: usize) -> ApiResult<Bytes> {
+    let mut stream = body.into_data_stream();
+    let mut buf = Vec::with_capacity(limit);
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| ApiError::bad_request("cannot read body"))?;
+        if buf.len() + chunk.len() > limit {
+            return Err(too_large());
+        }
+        buf.extend_from_slice(&chunk);
     }
+    Ok(buf.into())
+}
+
+/// Authorize an upload (token, group state, round) and validate the `Content-Length` before
+/// the body is read; then read exactly the expected number of bytes at most.
+async fn authorized_upload(
+    app: &App,
+    gid: &[u8; 16],
+    round: u32,
+    phase: Phase,
+    headers: &HeaderMap,
+    body: Body,
+) -> ApiResult<Bytes> {
+    let expected = app
+        .upload_precheck(*gid, round, phase, bearer(headers).as_ref())
+        .await?;
+    if signature(headers)?.is_none() {
+        return Err(ApiError::bad_request("missing upload signature"));
+    }
+    if let Some(v) = headers.get(header::CONTENT_LENGTH) {
+        let len: u64 = v
+            .to_str()
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .ok_or(ApiError::bad_request("invalid content-length"))?;
+        if len > expected as u64 {
+            return Err(too_large());
+        }
+        if len < expected as u64 {
+            return Err(ApiError::bad_request("wrong upload length"));
+        }
+    }
+    read_body(body, expected).await
 }
 
 /// Client IP for rate limiting only (never logged or stored). Behind a trusted reverse proxy
@@ -172,10 +236,9 @@ impl FromRequestParts<Arc<App>> for ClientIp {
     type Rejection = Infallible;
 
     async fn from_request_parts(parts: &mut Parts, app: &Arc<App>) -> Result<Self, Infallible> {
+        let forwarded = parts.headers.get_all("x-forwarded-for");
         if app.cfg.trust_proxy
-            && let Some(ip) = parts
-                .headers
-                .get_all("x-forwarded-for")
+            && let Some(ip) = forwarded
                 .iter()
                 .next_back()
                 .and_then(|v| v.to_str().ok())
@@ -184,12 +247,12 @@ impl FromRequestParts<Arc<App>> for ClientIp {
         {
             return Ok(ClientIp(Some(ip)));
         }
-        Ok(ClientIp(
-            parts
-                .extensions
-                .get::<ConnectInfo<SocketAddr>>()
-                .map(|c| c.0.ip()),
-        ))
+        let peer = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|c| c.0.ip());
+        app.note_untrusted_peer(peer, forwarded.iter().next().is_some());
+        Ok(ClientIp(peer))
     }
 }
 
@@ -314,19 +377,24 @@ async fn upload_roles(
     State(app): AppState,
     Params((gid, r)): Params<(String, u32)>,
     headers: HeaderMap,
-    RawBody(body): RawBody,
+    body: Body,
 ) -> ApiResult<StatusCode> {
+    let gid = parse_id(&gid)?;
+    let body = authorized_upload(&app, &gid, r, Phase::Roles, &headers, body).await?;
     let sig = signature(&headers)?;
-    app.upload_roles(parse_id(&gid)?, r, bearer(&headers), sig, &body)
+    app.upload_roles(gid, r, bearer(&headers), sig, &body)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_roles(
     State(app): AppState,
+    ClientIp(ip): ClientIp,
     Params((gid, r)): Params<(String, u32)>,
 ) -> ApiResult<Response> {
-    let data = app.roles_result(parse_id(&gid)?, r).await?;
+    let gid = parse_id(&gid)?;
+    app.limit_download(ip)?;
+    let data = app.roles_result(gid, r).await?;
     let mut res = Response::new(axum::body::Body::from(data));
     res.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -339,19 +407,24 @@ async fn upload_reveal(
     State(app): AppState,
     Params((gid, r)): Params<(String, u32)>,
     headers: HeaderMap,
-    RawBody(body): RawBody,
+    body: Body,
 ) -> ApiResult<StatusCode> {
+    let gid = parse_id(&gid)?;
+    let body = authorized_upload(&app, &gid, r, Phase::Reveal, &headers, body).await?;
     let sig = signature(&headers)?;
-    app.upload_reveal(parse_id(&gid)?, r, bearer(&headers), sig, &body)
+    app.upload_reveal(gid, r, bearer(&headers), sig, &body)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_reveal(
     State(app): AppState,
+    ClientIp(ip): ClientIp,
     Params((gid, r)): Params<(String, u32)>,
 ) -> ApiResult<Json<RevealRelease>> {
-    Ok(Json(app.reveal_release(parse_id(&gid)?, r).await?))
+    let gid = parse_id(&gid)?;
+    app.limit_download(ip)?;
+    Ok(Json(app.reveal_release(gid, r).await?))
 }
 
 fn sse_event(ev: &UpdateEvent) -> Event {
@@ -362,15 +435,18 @@ fn sse_event(ev: &UpdateEvent) -> Event {
 
 async fn events(
     State(app): AppState,
+    ClientIp(ip): ClientIp,
     Params(gid): Params<String>,
 ) -> ApiResult<Sse<impl Stream<Item = Result<Event, Infallible>>>> {
     let gid = parse_id(&gid)?;
-    let (initial, rx) = app.subscribe(&gid).await?;
+    let (initial, Subscription { rx, slot }) = app.subscribe(&gid, ip).await?;
     let first = stream::once(async move { Ok(sse_event(&initial)) });
-    let rest = stream::unfold(rx, |mut rx| async move {
+    // The slot travels with the stream and frees the connection count when it is dropped
+    // (client gone, group deleted, shutdown).
+    let rest = stream::unfold((rx, slot), |(mut rx, slot)| async move {
         loop {
             match rx.recv().await {
-                Ok(ev) => return Some((Ok(sse_event(&ev)), rx)),
+                Ok(ev) => return Some((Ok(sse_event(&ev)), (rx, slot))),
                 // Clients refetch on every event; skipping lagged ones is harmless.
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return None,

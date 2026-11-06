@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
-use tokio::sync::{OwnedMutexGuard, broadcast};
+use tokio::sync::{OwnedMutexGuard, Semaphore};
 use wichtel_api::{
     CreateGroupRequest, ErrorCode, GroupState, GroupView, JoinRequest, ParticipantView, Phase,
     Progress, PushSubscriptionRequest, RevealEntry, RevealRelease, UpdateEvent,
@@ -18,9 +18,9 @@ use wichtel_core::{L_REVEAL_UPLOAD, L_SD, N_MAX, N_MIN, T_ATTEMPTS, roles_vector
 
 use crate::config::Config;
 use crate::error::{ApiError, ApiResult};
-use crate::events::Hub;
+use crate::events::{Hub, Refused, SseLimits, Subscription};
 use crate::protocol::ProtocolOps;
-use crate::push::{PushClient, PushDispatcher, Vapid, validate_endpoint};
+use crate::push::{PushClient, PushDispatcher, PushWorker, Vapid, validate_endpoint};
 use crate::ratelimit::{Bucket, RateLimiter};
 use crate::store::{
     AggregateRecord, Gid, GroupRecord, ParticipantRecord, Pid, PushSubRecord, Store, StoreError,
@@ -37,6 +37,8 @@ pub const MAX_ENC_WISH: usize = 1100;
 pub const MAX_LIFETIME: i64 = 60 * 86_400;
 /// Unused open groups are deleted after 7 days without activity (Review D2).
 pub const IDLE_LIFETIME: i64 = 7 * 86_400;
+/// Open groups without any participant are deleted after 24 hours without activity.
+pub const EMPTY_LIFETIME: i64 = 86_400;
 /// Reminder push this many seconds before `draw_at` (Konzept §6.6).
 pub const REMINDER_LEAD: i64 = 600;
 const RATE_WINDOW: i64 = 3600;
@@ -84,10 +86,10 @@ impl GroupLocks {
     }
 }
 
-/// Bundled `VACUUM` after deletions of sensitive data (Spec §14).
+/// Bundled `VACUUM` after deletions or overwrites of sensitive data (Spec §14).
 #[derive(Default)]
 struct VacuumState {
-    pending: AtomicBool,
+    pending: Arc<AtomicBool>,
     last: Mutex<Option<i64>>,
 }
 
@@ -99,14 +101,18 @@ pub struct App {
     pub clock: Arc<dyn Clock>,
     pub hub: Hub,
     pub vapid: Arc<Vapid>,
+    /// Permits for concurrently processed requests (`max_concurrent_requests`).
+    pub inflight: Arc<Semaphore>,
     push: PushDispatcher,
     locks: GroupLocks,
     rate: RateLimiter,
     vacuum: VacuumState,
+    proxy_warned: AtomicBool,
 }
 
 impl App {
-    /// Build the application; loads or creates the VAPID key and starts the push worker.
+    /// Build the application; loads or creates the VAPID key, compacts the database if it
+    /// contains free pages (deleted data from before a restart) and starts the push worker.
     pub async fn new(
         cfg: Config,
         store: Arc<dyn Store>,
@@ -114,9 +120,24 @@ impl App {
         clock: Arc<dyn Clock>,
         push_client: Arc<dyn PushClient>,
     ) -> Result<Arc<Self>, StoreError> {
+        // Deletions that were not compacted before a crash or restart (the in-RAM flag is
+        // lost; the store keeps a persistent marker and reports free pages).
+        if store.needs_vacuum().await? {
+            tracing::info!("deleted data pending from before the start, running VACUUM");
+            store.vacuum().await?;
+        }
         let vapid = Arc::new(Vapid::load_or_create(&*store, cfg.vapid_subject.clone()).await?);
-        let push = PushDispatcher::spawn(store.clone(), vapid.clone(), push_client, clock.clone());
+        let vacuum = VacuumState::default();
+        let push = PushDispatcher::spawn(PushWorker {
+            store: store.clone(),
+            vapid: vapid.clone(),
+            client: push_client,
+            clock: clock.clone(),
+            min_interval: cfg.push_min_interval,
+            vacuum_pending: vacuum.pending.clone(),
+        });
         Ok(Arc::new(Self {
+            inflight: Arc::new(Semaphore::new(cfg.max_concurrent_requests)),
             cfg,
             store,
             ops,
@@ -126,8 +147,44 @@ impl App {
             push,
             locks: GroupLocks::default(),
             rate: RateLimiter::default(),
-            vacuum: VacuumState::default(),
+            vacuum,
+            proxy_warned: AtomicBool::new(false),
         }))
+    }
+
+    /// Graceful shutdown: end all SSE streams and refuse new ones.
+    pub fn shutdown(&self) {
+        self.hub.shutdown();
+    }
+
+    /// Called with the TCP peer of every request while `WICHTEL_TRUST_PROXY` is off. A peer on
+    /// loopback or an `X-Forwarded-For` header suggests a reverse proxy, which would make all
+    /// clients share one rate limit: warn once (without logging any address). Returns whether
+    /// the warning was emitted by this call.
+    pub fn note_untrusted_peer(&self, peer: Option<IpAddr>, forwarded: bool) -> bool {
+        if self.cfg.trust_proxy || self.proxy_warned.load(Ordering::Relaxed) {
+            return false;
+        }
+        let loopback = peer.is_some_and(|ip| match ip {
+            IpAddr::V4(v4) => v4.is_loopback(),
+            IpAddr::V6(v6) => {
+                v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+            }
+        });
+        if !(loopback || forwarded) || self.proxy_warned.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        tracing::warn!(
+            "request via loopback or with X-Forwarded-For while WICHTEL_TRUST_PROXY is off: \
+             behind a reverse proxy all clients share one rate limit; set \
+             WICHTEL_TRUST_PROXY=true if the proxy sets X-Forwarded-For"
+        );
+        true
+    }
+
+    /// Whether the reverse-proxy warning of [`App::note_untrusted_peer`] was emitted.
+    pub fn proxy_warning_emitted(&self) -> bool {
+        self.proxy_warned.load(Ordering::SeqCst)
     }
 
     pub fn now(&self) -> i64 {
@@ -273,6 +330,17 @@ impl App {
         req: CreateGroupRequest,
     ) -> ApiResult<Gid> {
         self.rate_limit(ip, Bucket::CreateGroup, self.cfg.create_limit_per_hour)?;
+        if !self.rate.check_global(
+            Bucket::CreateGroupGlobal,
+            self.cfg.create_limit_global_per_hour,
+            RATE_WINDOW,
+            self.now(),
+        ) {
+            return Err(ApiError::new(
+                ErrorCode::TooManyRequests,
+                "too many new groups, try again later",
+            ));
+        }
         if req.enc_meta.0.len() > MAX_ENC_META {
             return Err(ApiError::new(
                 ErrorCode::PayloadTooLarge,
@@ -349,7 +417,6 @@ impl App {
                     idh: wichtel_api::Fixed(p.idh),
                     enc_name: wichtel_api::Bin(p.enc_name),
                     enc_wish: wichtel_api::Bin(p.enc_wish),
-                    joined_at: p.joined_at,
                 })
                 .collect(),
             progress,
@@ -369,20 +436,27 @@ impl App {
         })
     }
 
-    /// Subscribe to group updates (SSE).
+    /// Subscribe to group updates (SSE). The group must exist before a channel is created;
+    /// the initial event is computed after subscribing, so no update is missed.
     pub async fn subscribe(
         &self,
         gid: &Gid,
-    ) -> ApiResult<(UpdateEvent, broadcast::Receiver<UpdateEvent>)> {
-        let rx = self
-            .hub
-            .subscribe(*gid, self.cfg.sse_per_group)
-            .ok_or(ApiError::new(
-                ErrorCode::TooManyRequests,
-                "too many listeners",
-            ))?;
+        ip: Option<IpAddr>,
+    ) -> ApiResult<(UpdateEvent, Subscription)> {
+        self.load_group(gid).await?;
+        let limits = SseLimits {
+            per_group: self.cfg.sse_per_group,
+            per_ip: self.cfg.sse_per_ip,
+            total: self.cfg.sse_total,
+        };
+        let sub = self.hub.subscribe(*gid, ip, limits).map_err(|e| match e {
+            Refused::Limit => ApiError::new(ErrorCode::TooManyRequests, "too many listeners"),
+            Refused::ShuttingDown => {
+                ApiError::new(ErrorCode::TooManyRequests, "server is shutting down")
+            }
+        })?;
         let ev = self.current_event(gid).await?;
-        Ok((ev, rx))
+        Ok((ev, sub))
     }
 
     pub async fn delete_group(&self, gid: Gid, token: Option<[u8; 32]>) -> ApiResult<()> {
@@ -586,6 +660,8 @@ impl App {
                 WriteOp::UpsertGroup(g.clone()),
             ])
             .await?;
+        // The old name/wish ciphertexts may survive in free space until VACUUM.
+        self.mark_vacuum();
         self.emit(&g, parts.len(), 0, false);
         Ok(())
     }
@@ -621,17 +697,50 @@ impl App {
                     Self::begin_draw(&mut g, now);
                 }
                 ops.push(WriteOp::ClearRounds { gid });
-                self.mark_vacuum();
                 true
             }
         };
         ops.push(WriteOp::UpsertGroup(g.clone()));
         self.store.commit(ops).await?;
+        self.mark_vacuum();
         self.emit(&g, n, 0, push);
         Ok(())
     }
 
     // ------------------------------------------------------------------ protocol
+
+    /// Checks before an upload body is read: the token belongs to a participant and the group
+    /// accepts uploads of `phase` in `round`. Returns the exact expected body length, so the
+    /// caller reads at most that many bytes. Everything is checked again under the group
+    /// lock by [`App::upload_roles`] / [`App::upload_reveal`].
+    pub async fn upload_precheck(
+        &self,
+        gid: Gid,
+        round: u32,
+        phase: Phase,
+        token: Option<&[u8; 32]>,
+    ) -> ApiResult<usize> {
+        let token = token.ok_or_else(ApiError::unauthorized)?;
+        let g = self.load_group(&gid).await?;
+        let parts = self.store.list_participants(&gid).await?;
+        self.find_by_token(&parts, token)
+            .ok_or_else(ApiError::unauthorized)?;
+        if g.state != (GroupState::Drawing { round, phase }) {
+            return Err(ApiError::conflict(match phase {
+                Phase::Roles => "not accepting role vectors for this round",
+                Phase::Reveal => "not accepting reveals for this round",
+            }));
+        }
+        Ok(match phase {
+            Phase::Roles => roles_vector_len(parts.len()),
+            Phase::Reveal => L_REVEAL_UPLOAD,
+        })
+    }
+
+    /// Rate limit for the large public downloads (`R`, reveal release).
+    pub fn limit_download(&self, ip: Option<IpAddr>) -> ApiResult<()> {
+        self.rate_limit(ip, Bucket::Download, self.cfg.download_limit_per_hour)
+    }
 
     /// Step 1 upload: XOR `V_i` into the running aggregate (Spec §7.4).
     pub async fn upload_roles(
@@ -712,13 +821,15 @@ impl App {
         } else {
             tracing::info!(round, "collision in area E, next round");
             Self::next_round(&mut g, now);
-            self.mark_vacuum();
             vec![
                 WriteOp::ClearRounds { gid },
                 WriteOp::UpsertGroup(g.clone()),
             ]
         };
         self.store.commit(ops).await?;
+        // Partial aggregates (overwritten) or the whole round (cleared) may survive in free
+        // space until VACUUM.
+        self.mark_vacuum();
         self.emit(&g, n, 0, true);
         Ok(())
     }
@@ -860,8 +971,8 @@ impl App {
                 ]
             }
         };
-        self.mark_vacuum();
         self.store.commit(ops).await?;
+        self.mark_vacuum();
         self.emit(&g, n, 0, true);
         Ok(())
     }
@@ -926,6 +1037,8 @@ impl App {
                 created_at: self.now(),
             })])
             .await?;
+        // A replaced subscription (old endpoint/keys) may survive until VACUUM.
+        self.mark_vacuum();
         Ok(())
     }
 
@@ -948,6 +1061,7 @@ impl App {
         self.store
             .commit(vec![WriteOp::DeletePushSub { gid, pid }])
             .await?;
+        self.mark_vacuum();
         Ok(())
     }
 
@@ -1005,12 +1119,18 @@ impl App {
         Ok(())
     }
 
-    /// Delete expired groups and unused open groups (Spec §10, Review D2).
+    /// Delete expired groups, unused open groups (Spec §10, Review D2) and groups nobody
+    /// joined within [`EMPTY_LIFETIME`].
     pub async fn expire_groups(&self) -> ApiResult<()> {
         let now = self.now();
         let mut doomed = self.store.list_expired(now).await?;
         for (gid, n) in self.store.list_idle_open(now - IDLE_LIFETIME).await? {
             if (n as usize) < N_MIN && !doomed.contains(&gid) {
+                doomed.push(gid);
+            }
+        }
+        for gid in self.store.list_empty_open(now - EMPTY_LIFETIME).await? {
+            if !doomed.contains(&gid) {
                 doomed.push(gid);
             }
         }
