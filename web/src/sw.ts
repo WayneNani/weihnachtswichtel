@@ -1,10 +1,12 @@
 /**
  * Service worker (served as /sw.js). Only used for Web-Push (Konzept §7.4):
  * - Pushes carry no payload; we always show the same fixed text.
- * - A click opens the personal link stored in IndexedDB (never sent anywhere).
+ * - Registered once per group with scope `/g/<gid>/` (own push endpoint per group).
+ * - A click opens the personal link of that group stored in IndexedDB (never sent anywhere).
  * No caching, no fetch handler: the app always talks to the server directly.
  */
 import { idbKv, PUSH_LINKS_KEY, type PushLink } from "./lib/idb";
+import { gidFromScope } from "./lib/pushscope";
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
 const kv = idbKv();
@@ -27,20 +29,29 @@ sw.addEventListener("push", (event) => {
       body: NOTIFICATION_BODY,
       icon: "/icon-192.png",
       badge: "/icon-192.png",
-      tag: "wichtel-update",
+      // One notification per group (a newer one replaces the older of the same group only).
+      tag: scopeGid ? `wichtel-update-${scopeGid}` : "wichtel-update",
       lang: "de",
     }),
   );
 });
 
+/** Group of this registration (scope `/g/<gid>/`, see lib/pushscope.ts); null for the legacy "/" scope. */
+const scopeGid = gidFromScope(sw.registration.scope);
+
 async function targetUrl(): Promise<string> {
   try {
     const links = (await kv.get<PushLink[]>(PUSH_LINKS_KEY)) ?? [];
-    if (links.length === 1) return links[0]!.link;
+    if (scopeGid) {
+      const own = links.find((l) => l.gid === scopeGid);
+      if (own) return own.link;
+    } else if (links.length === 1) {
+      return links[0]!.link;
+    }
   } catch {
     /* fall through */
   }
-  // Several (or unknown) rounds: the start page lists the rounds stored on this device.
+  // Unknown (or, for the legacy registration, several) rounds: the start page lists the rounds stored on this device.
   return "/";
 }
 

@@ -1,22 +1,26 @@
 import { useState } from "preact/hooks";
 import { b64uDecodeLen } from "../lib/bytes";
 import { buildFragment, SECRET_LEN, type Secrets } from "../lib/fragment";
-import { forgetGroup, listGroups } from "../lib/storage";
-import { forgetPush } from "../push";
-import { navigate } from "./app";
+import { forgetGroupOnDevice } from "../forget";
+import { listGroups } from "../lib/storage";
+import { navigate, useServices } from "./app";
 
+/**
+ * Link to a group stored on this device. The seed is never put into the address bar: the group
+ * page takes it from local storage (see mergeSecrets).
+ */
 function localLink(gid: string, rec: { k: string; a?: string; s?: string }): string | null {
   const k = b64uDecodeLen(rec.k, SECRET_LEN);
   if (!k) return null;
   const s: Secrets = { k };
   const seed = rec.s ? b64uDecodeLen(rec.s, SECRET_LEN) : null;
   const admin = rec.a ? b64uDecodeLen(rec.a, SECRET_LEN) : null;
-  if (seed) s.s = seed;
-  else if (admin) s.a = admin;
+  if (admin && !seed) s.a = admin;
   return `/g/${gid}${buildFragment(s)}`;
 }
 
 export function HomePage() {
+  const services = useServices();
   const [groups, setGroups] = useState(() => listGroups());
   return (
     <>
@@ -62,8 +66,8 @@ export function HomePage() {
                     class="btn-link danger"
                     onClick={() => {
                       if (!confirm("Diese Runde von diesem Gerät entfernen? Ohne deinen persönlichen Link kommst du dann nicht mehr an dein Ergebnis.")) return;
-                      forgetGroup(gid);
-                      void forgetPush(gid);
+                      // Removes the local record synchronously; push/IndexedDB cleanup continues in the background.
+                      void forgetGroupOnDevice(gid, { kv: services.kv, api: services.api, wasm: services.wasm });
                       setGroups(listGroups());
                     }}
                   >

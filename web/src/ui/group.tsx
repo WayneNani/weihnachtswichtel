@@ -2,8 +2,9 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { N_MAX } from "../api/types";
 import { b64uEncode } from "../lib/bytes";
-import { groupLink, type Route } from "../lib/fragment";
-import { loadGroup, mergeSecrets, saveGroup, storageAvailable } from "../lib/storage";
+import { addressBarFragment, groupLink, type Route, type Secrets } from "../lib/fragment";
+import { loadGroup, mergeSecrets, saveGroup, seedPersisted, storageAvailable } from "../lib/storage";
+import { forgetDriverState } from "../protocol/driver";
 import { forgetPush } from "../push";
 import { useServices } from "./app";
 import { Countdown, errorText, formatDate, Notice } from "./common";
@@ -30,6 +31,16 @@ export function GroupPage({ route }: { route: GroupRoute }) {
     );
   }
   return <GroupPageInner route={route} secretsFromUrl={route.fragment.secrets} />;
+}
+
+/** Replaces the current history entry (no navigation, no new entry). */
+function setAddressBar(gidB64: string, secrets: Secrets, keepSeed: boolean): void {
+  try {
+    const url = `/g/${gidB64}${addressBarFragment(secrets, keepSeed)}`;
+    if (location.pathname + location.hash !== url) history.replaceState(history.state, "", url);
+  } catch {
+    /* ignore */
+  }
 }
 
 function useSnapshot(ctrl: GroupController): Snapshot {
@@ -59,6 +70,11 @@ function GroupPageInner({ route, secretsFromUrl }: { route: GroupRoute; secretsF
     if (secretsFromUrl.a) patch.a = b64uEncode(secretsFromUrl.a);
     if (secretsFromUrl.s && (!rec?.s || rec.k !== patch.k)) patch.s = b64uEncode(secretsFromUrl.s);
     saveGroup(route.gidB64, patch);
+    // Personal link opened (e.g. on a new device): once the seed is stored here, reduce the
+    // address bar to the invite/admin link so that sharing the URL never passes on the seed.
+    if (secretsFromUrl.s && seedPersisted(route.gidB64, secretsFromUrl.k, secretsFromUrl.s)) {
+      setAddressBar(route.gidB64, secretsFromUrl, false);
+    }
     ctrl.start();
     return () => ctrl.stop();
   }, []);
@@ -76,13 +92,13 @@ function GroupPageInner({ route, secretsFromUrl }: { route: GroupRoute; secretsF
     ctrl.setSeed(seed);
     await ctrl.refresh();
     setSaveDialog("forced");
-    // Make the address bar bookmarkable as the personal link (not for the Spielleiter-Link).
+    // The personal link is only offered in the save dialog; the address bar shows the invite link
+    // (a bookmark of it still leads back here with the seed stored on this device). Only if this
+    // browser cannot store anything does the address bar keep the seed – it is the only way back.
+    // The Spielleiter-Link stays as it is.
     if (!secretsFromUrl.a) {
-      try {
-        history.replaceState(null, "", groupLink("", route.gidB64, "personal", { k: secrets.k, s: seed }));
-      } catch {
-        /* ignore */
-      }
+      const keepSeed = !seedPersisted(route.gidB64, secrets.k, seed);
+      setAddressBar(route.gidB64, { k: secrets.k, s: seed }, keepSeed);
     }
   };
 
@@ -128,7 +144,11 @@ function GroupPageInner({ route, secretsFromUrl }: { route: GroupRoute; secretsF
     try {
       await ctrl.api.removeParticipant(route.gidB64, snap.myPid, keys.authToken);
       saveGroup(route.gidB64, { s: undefined, pid: undefined, note: undefined, push: undefined, linkSaved: undefined });
+      // The server dropped the push subscription with the participant; clean up this device.
       void forgetPush(route.gidB64);
+      void forgetDriverState(ctrl.kv, route.gidB64);
+      // A personal link in the address bar (no local storage) would now point to a stale seed.
+      setAddressBar(route.gidB64, { k: secrets.k, a: secretsFromUrl.a }, false);
       ctrl.setSeed(null);
       setLeft(true);
       await ctrl.refresh();
@@ -239,7 +259,7 @@ function GroupPageInner({ route, secretsFromUrl }: { route: GroupRoute; secretsF
           ) : (
             <Notice kind="info" title={view.state === "done" ? "Die Verlosung ist abgeschlossen" : "Die Verlosung läuft bereits"}>
               Neue Teilnehmer können nicht mehr beitreten. Wenn du dabei bist, öffne bitte deinen{" "}
-              <strong>persönlichen Link</strong> (aus deinen Lesezeichen) – nur damit kann dieses Gerät dein Ergebnis
+              <strong>persönlichen Link</strong> (den du beim Mitmachen gespeichert hast) – nur damit kann dieses Gerät dein Ergebnis
               anzeigen.
             </Notice>
           )}
