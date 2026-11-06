@@ -1,0 +1,45 @@
+name: Build-Werkzeuge
+description: >
+  Rust (stable) mit Target wasm32-unknown-unknown, wasm-bindgen-cli in der Version aus Cargo.lock
+  (vorkompiliertes Binary), Node 22 und npm ci in web/ – alles, was scripts/build-all.sh braucht.
+  Cargo- und npm-Caches inklusive.
+
+inputs:
+  cache-key:
+    description: shared-key für Swatinem/rust-cache (Jobs mit gleichem Build teilen den Cache)
+    required: false
+    default: build
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ inputs.cache-key }}
+
+    - name: wasm-bindgen-cli (Version aus Cargo.lock)
+      shell: bash
+      run: |
+        set -euo pipefail
+        v="$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')"
+        name="wasm-bindgen-$v-x86_64-unknown-linux-musl"
+        curl -fsSL --retry 3 \
+          "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$v/$name.tar.gz" \
+          | tar -xz -C "$RUNNER_TEMP"
+        install -m 0755 "$RUNNER_TEMP/$name/wasm-bindgen" "$HOME/.cargo/bin/wasm-bindgen"
+        wasm-bindgen --version
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: web/package-lock.json
+
+    - name: npm ci (web)
+      shell: bash
+      working-directory: web
+      run: npm ci --no-audit --no-fund

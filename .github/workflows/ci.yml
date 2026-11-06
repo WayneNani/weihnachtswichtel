@@ -11,6 +11,7 @@ env:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       matrix:
         crate: [wichtel-core, wichtel-api, wichtel-wasm, wichtel-server]
@@ -20,22 +21,15 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.crate }}
       - run: cargo fmt --all -- --check
       - run: cargo clippy -p ${{ matrix.crate }} --all-targets -- -D warnings
       - run: cargo test -p ${{ matrix.crate }} -- --test-threads=2
 
-  wasm:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p wichtel-core -p wichtel-wasm --target wasm32-unknown-unknown
-
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: web
@@ -46,6 +40,47 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm ci
+      - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
+      - run: npm test
       - run: npm run build
+
+  # Echtes WASM + Web + Server bauen, dann WASM-Tests und HTTP-Smoke-Test (ohne Browser).
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+      - run: cargo check -p wichtel-core -p wichtel-wasm --target wasm32-unknown-unknown
+      - run: scripts/build-all.sh
+      - run: node scripts/test-wasm.mjs
+      - run: node scripts/smoke.mjs
+
+  # Browser-E2E (Playwright-Library + Chromium, tests/e2e). Eigener Job, baut selbst (Cache geteilt).
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      PLAYWRIGHT_VERSION: 1.63.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+      - run: scripts/build-all.sh
+      - name: Playwright + Chromium
+        # global installiert: tests/e2e/lib/harness.mjs lädt `playwright` neben dem Node-Binary
+        run: |
+          npm install -g --no-audit --no-fund "playwright@$PLAYWRIGHT_VERSION"
+          playwright install --with-deps chromium
+      - run: scripts/e2e.sh
+      - name: Screenshots bei Fehlschlag
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: tests/e2e/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
