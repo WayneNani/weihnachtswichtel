@@ -38,7 +38,7 @@ Sybils ist die Anonymität weg. Kryptographie kann das nicht verhindern.
 du alle kennst?“. Teilnehmerzahl und Fingerabdruck prominent. Optional: Einladungslink deaktivieren,
 sobald alle drin sind.
 
-### B2 🟡 Kreisstruktur und kleine Gruppen
+### B2 🟡 Kreisstruktur und kleine Gruppen *(überholt: kein Kreis mehr, siehe G3)*
 Ein einzelner Kreis ist nur eine Teilmenge aller fixpunktfreien Permutationen. Folgen: keine
 2er-Pärchen (gewollt), aber bei **n = 3 kennt jeder die komplette Zuordnung** (A→B ⇒ B→C ⇒ C→A).
 Das gilt für n = 3 bei *jedem* Verfahren, da es nur zwei fixpunktfreie Permutationen gibt.
@@ -46,7 +46,7 @@ Das gilt für n = 3 bei *jedem* Verfahren, da es nur zwei fixpunktfreie Permutat
 *Entscheidung:* Minimum **n = 4**, bei n ≤ 5 Hinweis anzeigen. Kreis beibehalten. Zur
 Koalitions-Problematik der öffentlichen Reihenfolge siehe F4.
 
-### B3 🟡 Kollisionen und Störer im DC-Netz
+### B3 🟡 Kollisionen und Störer im DC-Netz *(Störerschutz entfällt, siehe G2)*
 ~3 % Kollisionswahrscheinlichkeit pro Runde; in v1 konnte ein böswilliger Teilnehmer jede Runde
 unerkannt stören (Jamming). Im Asynchron-Modus kostet jeder Neustart allen einen weiteren Besuch.
 
@@ -116,7 +116,7 @@ Ohne Konten kann jeder Gruppen anlegen und MB-weise Daten hochladen.
 *Entscheidung:* Größenlimits pro Feld, Rate-Limit pro IP **nur im RAM** (nicht persistiert),
 Ablauf ungenutzter Gruppen nach 7 Tagen, globale Speicherobergrenze.
 
-### D3 🟢 Turso
+### D3 🟢 Turso *(überholt, siehe G1)*
 Siehe Konzept §8: Mehrwert gering, zusätzlicher Auftragsverarbeiter. Entscheidung: SQLite hinter
 `Store`-Trait.
 
@@ -159,4 +159,51 @@ Die kritischen Punkte lagen im Fehlerfall-Handling (F1–F3) und in der Ehrlichk
 Bedrohungsmodells (A1/F5). Beides ist in v2 adressiert. Restrisiken, die bewusst akzeptiert werden:
 aktiv bösartiger Server (A1), Sybils ohne menschliche Prüfung (B1), Nachbarschafts-Wissen von
 Koalitionen (F4), ~3 % Kollisionsrunden.
+
+## G. Entscheidungen nach Rückmeldung (Konzept v3)
+
+### G1 Datenbank: Turso lokal
+Turso wird als **eingebettete lokale Datenbank** (Crate `turso`, reines Rust) genutzt, nicht als
+Cloud-Dienst. Damit entfällt das Datenschutz-Argument aus D3. Neues Restrisiko: Der Crate ist noch
+**vor 1.0**. Gegenmaßnahmen: `Store`-Trait, exakt gepinnte Version, Feature-Check in Phase 0
+(insbesondere `secure_delete`/`VACUUM`, vgl. F13), Integrationstests gegen echte Datei.
+
+### G2 Kein Schutz gegen Störer
+Ein Teilnehmer, der absichtlich kaputte Daten schickt, wird **nicht** abgewehrt oder überführt.
+Begründung: In Wichtelrunden unter Bekannten unwahrscheinlich, und der Schutz kostet viel
+Komplexität. Störer können die Verlosung **blockieren**, aber **nichts herausfinden**.
+
+Damit entfallen aus Abschnitt F: Blame-Verfahren (F2), Slot-Commitments gegen Rushing (F3),
+Beschwerden mit Beweis (F1-Teil, F11), Masken-Korrektur für Abbrecher (F8-Teil).
+
+**F1 bleibt trotzdem gelöst**, und zwar einfacher: Teilnehmer können überhaupt keinen Neustart
+auslösen, sobald Ergebnisse freigegeben sind. Automatische Folgerunden gibt es nur bei Kollisionen
+*vor* jeder Freigabe. Eine neue Verlosung startet nur der Spielleiter, und zwar wenn jemand austritt
+oder ein technischer Fehler auftritt. Das ist für alle sichtbar und wird mitgezählt.
+
+Restrisiko: Ein Spielleiter mit DB-Lesezugriff, der mit einem Teilnehmer zusammenarbeitet, könnte
+als Letzter hochladen und σ durch Ausprobieren beeinflussen (G3). Gewinn: höchstens eine
+Schenker→Beschenkter-Kante in der Nähe der Verbündeten. Akzeptiert.
+
+### G3 Freie Auslosung statt Kreis
+Gewünscht: jede fixpunktfreie Zuordnung, also auch gegenseitiges Beschenken. Umsetzung: Die anonymen
+Positionen aus dem DC-Netz bleiben. Statt „k beschenkt k+1“ wird **öffentlich** eine gleichverteilte
+fixpunktfreie Permutation σ aus `R` abgeleitet. Weil die Positionen anonym und gleichverteilt sind,
+ist die Zuordnung zwischen Personen gleichverteilt fixpunktfrei, wie beim Ziehen aus dem Hut.
+
+**Preis, bewusst akzeptiert:** σ ist öffentlich. Beschenken sich zwei gegenseitig, *wissen* beide
+das, denn ihr Schenker ist dann sichtbar ihr Beschenkter. Das passiert pro Verlosung mit
+≈ 33–45 % Wahrscheinlichkeit bei mindestens einem Paar (exakt nachgezählt für n = 4…8, gegen
+1 − e^(−1/2) ≈ 39 % konvergierend). Die UI zeigt das offen an. Alle anderen erfahren ihren Schenker
+nicht. Ein verborgenes σ, bei dem jeder nur den eigenen Beschenkten erfährt, bräuchte ein echtes
+MPC-Protokoll mit sequentiellen Runden und ist nicht verhältnismäßig.
+
+Unverändert: **n ≥ 4** (bei n = 3 gibt es nur zwei fixpunktfreie Zuordnungen, jeder kennt alles).
+Bei n = 4 kennt mit dem eigenen Ergebnis und σ oft jemand fast alles; die UI warnt bei n ≤ 5.
+
+### G4 Neu auslosen nur bei Austritt
+Austritt nach der Verlosung ⇒ **komplette Neuverlosung** für alle, mit Warnung vorab. Eine
+„Reparatur“ (nur der Schenker des Ausgetretenen bekommt einen neuen Beschenkten) ist mit
+gegenseitigem Beschenken nicht immer möglich: Waren X und Y ein Paar, würde Y sich selbst ziehen.
+Deshalb ist die Neuverlosung die einfache und immer korrekte Lösung.
 

@@ -1,6 +1,6 @@
 # Weihnachtswichtel – Umsetzungsplan mit parallelen Subagents
 
-Stand: 2026-11-06 · Grundlage: `01-konzept.md` inkl. der Änderungen aus `02-review.md`
+Stand: 2026-11-06 · Grundlage: `01-konzept.md` v3 inkl. der Entscheidungen aus `02-review.md` §G
 
 ## 1. Leitplanken für die Maschinenlast
 
@@ -42,7 +42,7 @@ crates/
   wichtel-core/            # Protokoll & Krypto (no I/O), native + wasm32
   wichtel-api/             # DTOs, gemeinsam für Server und WASM
   wichtel-wasm/            # wasm-bindgen-Hülle
-  wichtel-server/          # axum, rusqlite, Ablauf-Job, statische Assets
+  wichtel-server/          # axum, turso (lokal), Ablauf-Job, statische Assets
 web/                       # TypeScript-UI (Preact + esbuild), Ausgabe nach web/dist
 docs/                      # Konzept, Review, Protokoll-Spezifikation, Plan
 tests/e2e/                 # Playwright-Szenarien
@@ -75,6 +75,10 @@ Phase 4                                                                   └─
   DC-Vektor, Ergebnis-Parsing, Reveal-Bau, Reveal-Auswertung.
 - Einmal `cargo build` (dev) für Warm-Cache; `wasm32-unknown-unknown`-Target + `wasm-bindgen-cli`
   installieren; `web/` mit `package.json` + esbuild initialisieren, `npm ci`.
+- **Turso-Spike** (≤ 20 min): `turso` exakt pinnen (`default-features = false`), kleines Testprogramm
+  prüft WAL, Transaktionen, BLOBs bis 2 MB, `PRAGMA secure_delete` bzw. `VACUUM`, parallele Leser
+  unter tokio. Ergebnis in `docs/04-protokoll-spec.md` § Persistenz festhalten; bei Lücken
+  Fallback-Entscheidung (rusqlite) dem Orchestrator melden.
 - CI-Skizze (`.github/workflows/ci.yml`): fmt, clippy, test pro Crate, web build.
 
 *Definition of Done:* `cargo check --workspace` grün, Spezifikation und API-Vertrag committed.
@@ -83,25 +87,29 @@ Phase 4                                                                   └─
 
 **A1 „core“** 🦀 — `crates/wichtel-core`
 - Schlüsselableitung aus `seed` (alle Rundenschlüssel deterministisch), Gruppenkontext `G_r`,
-  AEAD mit AAD für `GK`-Daten, Commitments `(E_r, H(x_r))`, Low-Order-Prüfung.
+  AEAD mit AAD für `GK`-Daten, Low-Order-Prüfung.
 - DC-Netz: Pads, Vektor, Slot per Rejection-Sampling, Ergebnis-Parsing, Kollisionserkennung.
-- **Blame-Verfahren**: Offenlegung prüfen, jeden Vektor nachrechnen, Störer bzw. ehrliche
-  Kollision feststellen; Herausrechnen von Abbrechern über offengelegte Paarmasken.
-- Kreisbildung, Enthüllung (HPKE-Auth, DH-MAC, Padding), Auswertung, Beschwerde mit Beweis.
-- **Protokoll-Simulation** als Test: n ∈ {3, 4, 7, 20, 50} Clients + In-Memory-Briefkasten;
-  Szenarien: Normalfall, ehrliche Kollision, Störer (Jamming ⇒ muss überführt werden),
-  Doppel-Claim und falscher MAC in der Enthüllung (⇒ Beschwerde überführt Täter), unbegründete
-  Beschwerde (⇒ Beschwerdeführer überführt), Abbrecher (⇒ Herausrechnen), Server-Equivocation
-  (verschiedene Rosters ⇒ Abbruch), vertauschte `enc_name` (⇒ abgelehnt). Property-Test: Ergebnis ist ein Kreis über alle.
-- Statistik-Test (klein, `#[ignore]` per Default): Gleichverteilung der Kreise für n=4.
+- **Auslosung σ**: deterministische, gleichverteilte fixpunktfreie Permutation aus `ρ`
+  (Fisher-Yates mit ChaCha20, Rejection bis fixpunktfrei, ohne Modulo-Bias).
+- Enthüllung (HPKE-Auth an `PDH_{σ⁻¹(k)}`, DH-MAC, Padding), Auswertung, Erkennung
+  „gegenseitiges Paar“ für die UI.
+- **Protokoll-Simulation** als Test: n ∈ {4, 5, 7, 20, 50} Clients + In-Memory-Briefkasten;
+  Szenarien: Normalfall, Kollision (⇒ Folgerunde), Austritt vor/während/nach der Verlosung
+  (⇒ Neuverlosung), Server-Equivocation (verschiedene Rosters ⇒ Abbruch), vertauschte `enc_name`
+  (⇒ abgelehnt), kaputter Vektor (⇒ Runde scheitert sauber, kein Leak, kein Panic).
+  Property-Test: Ergebnis ist eine fixpunktfreie Permutation über alle; jeder erfährt genau seinen
+  Beschenkten.
+- Statistik-Test (`#[ignore]` per Default, einmal manuell): Für n = 4 kommen alle 9
+  fixpunktfreien Zuordnungen gleich häufig vor (χ²-Test); Anteil gegenseitiger Paare ≈ 33 %.
 - Testvektoren-Datei für A4/A5.
 
 **A2 „server“** 🦀 — `crates/wichtel-server`
 - axum-Routen gemäß `wichtel-api`, Zustandsautomat, Auth (Hash-Vergleich in konstanter Zeit),
   Signaturprüfung der Uploads (nutzt nur die Verify-Funktion aus `core` – bis A1 fertig: Feature-Flag/Stub).
-- `Store`-Trait + `SqliteStore` (rusqlite, WAL, Migrations als SQL-Dateien).
+- `Store`-Trait + `TursoStore` (Crate `turso`, lokale Datei, Migrations als SQL-Dateien) – Erkenntnisse aus dem Turso-Spike beachten.
 - XOR-Aggregation der DC-Vektoren, Freigabe erst bei Vollständigkeit, Vektoren danach löschen
-  (`secure_delete`); Blame-/Beschwerde-Endpunkte; Neustart nur durch Admin, Rundenzähler öffentlich.
+  (`secure_delete` bzw. `VACUUM`); Folgerunde bei Kollision nur vor Freigabe der Enthüllungen;
+  Neuverlosung nur durch Admin (nach Austritt/Fehler), Zähler öffentlich.
 - SSE-Endpunkt, Größen- und Rate-Limits, Ablauf-/Lösch-Job.
 - Logging ohne IPs; Security-Header (CSP, Referrer-Policy, …); Auslieferung von `web/dist` via rust-embed.
 - Integrationstests mit `tower::ServiceExt::oneshot` + temporärer SQLite-Datei.
@@ -133,7 +141,7 @@ Jeder Agent rebased vor dem Merge auf den aktuellen Hauptzweig und lässt `cargo
 **A6 „E2E“**
 - Release-Build des Servers, Playwright mit **max. 2 Worker**:
   Szenarien mit 4 und 8 Browser-Kontexten (Live-Modus), Asynchron-Modus mit Neuladen über
-  persönliche Links, Spielleiter entfernt Abbrecher ⇒ Neustart, Kollision erzwingen (Test-Feature
+  persönliche Links, Austritt nach dem Ergebnis ⇒ Neuverlosung mit Warnung, Kollision erzwingen (Test-Feature
   mit kleinem `m`).
 - Prüft zusätzlich: Server-DB enthält nach der Runde keine Klartextnamen und nichts, woraus sich
   die Zuordnung ableiten ließe (Test liest die SQLite-Datei aus).
