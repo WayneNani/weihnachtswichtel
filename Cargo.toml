@@ -47,6 +47,7 @@ js-sys = "=0.3.107"
 # server
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "matched-path", "tracing"] }
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+futures-util = { version = "=0.3.34", default-features = false, features = ["alloc"] }
 tower = { version = "=0.5.3", default-features = false, features = ["util"] }
 tower-http = { version = "=0.7.1", default-features = false, features = ["set-header", "limit"] }
 tracing = "=0.1.44"
