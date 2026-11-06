@@ -2,14 +2,31 @@
 <html lang="de">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="referrer" content="no-referrer" />
-    <title>Weihnachtswichtel</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#b3261e" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#7f1d18" media="(prefers-color-scheme: dark)" />
+    <meta name="description" content="Wichteln ohne Konto: Niemand außer dir erfährt, wen du beschenkst." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Wichteln" />
+    <title>Wichteln</title>
     <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <div id="app"></div>
+    <a class="skip-link" href="#main">Zum Inhalt springen</a>
+    <div id="app">
+      <noscript>
+        <p class="card">Diese Seite braucht JavaScript: Die Verlosung wird in deinem Browser berechnet.</p>
+      </noscript>
+    </div>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

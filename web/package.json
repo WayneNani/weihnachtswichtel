@@ -6,7 +6,12 @@
   "description": "Browser UI for Weihnachtswichtel",
   "scripts": {
     "build": "node build.mjs",
+    "build:mock": "node build.mjs --mock",
     "dev": "node build.mjs --watch",
+    "dev:mock": "node build.mjs --mock --watch --serve",
+    "serve:mock": "node build.mjs --mock --serve",
+    "test": "node build.mjs --test",
+    "icons": "node tools/make-icons.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.sw.json"
   },
   "dependencies": {
