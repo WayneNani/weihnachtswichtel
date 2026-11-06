@@ -1,6 +1,6 @@
 # Weihnachtswichtel – Konzept
 
-Stand: 2026-11-06 · Status: Entwurf v3 (nach Review und Rückmeldung: lokales Turso, kein Störerschutz, freie Auslosung statt Kreis – siehe `02-review.md` §G)
+Stand: 2026-11-06 · Status: Entwurf v4 (nach Review und Rückmeldungen: lokales Turso, kein Störerschutz, freie Auslosung mit verborgenen gegenseitigen Paaren – siehe `02-review.md` §G)
 
 ## 1. Ziel
 
@@ -84,7 +84,8 @@ auf jedem Gerät und in jeder Phase genügt.
 | `isk`/`IPK` | `HKDF(seed, "id-sig")` | Ed25519: signiert Beitritt und Uploads gegenüber dem Server |
 | `idh`/`IDH` | `HKDF(seed, "id-dh")` | X25519: DC-Netz-Paarschlüssel und Identität gegenüber dem Schenker (HPKE-Auth) |
 | `tok` | `HKDF(seed, "auth")` | Bearer-Token; Server speichert nur `SHA-256(tok)` |
-| `pdh_r`/`PDH_r` | `HKDF(seed, "pseudo" ‖ G_r)` | X25519-Pseudonym je Protokollrunde r |
+| `rp_r`/`RP_r` | `HKDF(seed, "recv" ‖ G_r)` | X25519: anonyme **Beschenkten-Rolle** je Protokollrunde r |
+| `gp_{r,t}`/`GP_{r,t}` | `HKDF(seed, "give" ‖ G_r ‖ t)` | X25519: anonyme **Schenker-Rolle** je Runde r und Versuch t = 1…T |
 | `x_r` | `HKDF(seed, "slot" ‖ G_r)` | Zufallsquelle für die Slot-Wahl je Runde |
 
 Beim **Beitritt** lädt der Client hoch: `IPK`, `IDH`, `H(tok)`, `enc_name`, `enc_wish` – mit `isk`
@@ -100,15 +101,17 @@ Asynchron-Modus (Schutz gegen „jeder sieht eine eigene Welt aus Fake-Teilnehme
 
 ## 6. Das Verlosungsprotokoll
 
-Idee in einem Satz: *Jeder veröffentlicht **anonym** ein Pseudonym; danach wird **öffentlich** eine
-zufällige fixpunktfreie Zuordnung zwischen den Pseudonymen ausgelost (keiner zieht sich selbst,
-gegenseitiges Beschenken ist erlaubt); zum Schluss verrät sich jeder **nur seinem Schenker** – ohne
-zu wissen, wer das ist.*
+Die Idee: Jeder Teilnehmer hat **zwei voneinander unabhängige anonyme Rollen**, eine
+*Beschenkten-Rolle* und eine *Schenker-Rolle*. Niemand außer ihm selbst weiß, dass beide Rollen zu
+derselben Person gehören. Zwischen den Rollen wird **offen** gelost; weil niemand die Rollen den
+Personen zuordnen kann, verrät die offene Auslosung nichts. Zum Schluss verrät sich jeder **nur
+seinem Schenker**, ohne zu wissen, wer das ist.
 
-Weil niemand weiß, welches Pseudonym zu wem gehört, darf die Auslosung zwischen den Pseudonymen
-ganz offen passieren.
+Ergebnis: eine gleichverteilt zufällige Zuordnung, in der sich **niemand selbst zieht**,
+**gegenseitiges Beschenken möglich** ist und **niemand erkennen kann**, ob er in einem
+gegenseitigen Paar ist.
 
-### 6.1 Schritt 1 – Anonyme Pseudonyme (DC-Netz)
+### 6.1 Schritt 1 – Anonyme Rollen (DC-Netz, ein Upload)
 
 Anonymes Veröffentlichen ohne vertrauenswürdige Partei gelingt mit einem **DC-Netz**
 („Dining Cryptographers“), das alle Teilnehmer **parallel** in **einem** Durchgang ausführen:
@@ -117,57 +120,71 @@ Anonymes Veröffentlichen ohne vertrauenswürdige Partei gelingt mit einem **DC-
   `k_ij = HKDF(X25519(idh_i, IDH_j), "dcnet" ‖ G_r ‖ min(IDH_i,IDH_j) ‖ max(IDH_i,IDH_j))`
   – ohne Interaktion berechenbar, da alle `IDH` beim Beitritt hinterlegt wurden. Durch `G_r` (enthält
   die Rundennummer) sind die Masken jeder Runde neu.
-- Es gibt `m = max(64, 16·n²)` Slots à **40 Byte**: `PDH_r (32) ‖ SHA-256(G_r ‖ PDH_r)[0..8]`.
-- Slot `s_i` wird aus `x_r` per Rejection-Sampling (ohne Modulo-Bias) gezogen.
-- `V_i = ⊕_{j≠i} ChaCha20(k_ij)[0 .. 40·m]  ⊕  (Pseudonym an Position s_i)`.
-- Der Server sammelt alle `n` Vektoren und veröffentlicht erst dann `R = ⊕_i V_i`.
-  Die paarweisen Masken heben sich auf; in `R` stehen alle Pseudonyme – **ohne Absender**.
-- Jeder Client prüft: genau `n` gültige Slots **und** das eigene Pseudonym an der eigenen Stelle.
+- Der Vektor besteht aus **1 + T Bereichen** (T = 16):
+  - **Bereich E** (Beschenkten-Rollen): `m_E = 16·n²` Slots à 40 B:
+    `RP (32) ‖ SHA-256(G_r ‖ RP)[0..8]`. Eine Rolle pro Teilnehmer, gilt für alle Versuche.
+  - **Bereiche S_1 … S_T** (Schenker-Rollen, **pro Versuch frisch**): je `m_S = 4·n²` Slots à 32 B:
+    `GP_t`. Gültig ist ein Versuch, wenn genau n Slots belegt sind.
+- Jeder wählt pro Bereich einen Slot (aus `seed`-abgeleitetem Zufall, Rejection-Sampling ohne
+  Modulo-Bias) und schreibt dort seinen Schlüssel hinein. Den Vektor maskiert er mit
+  `⊕_{j≠i} ChaCha20(k_ij)` und lädt ihn hoch.
+- Der Server XORt die Vektoren **beim Eintreffen** auf (er speichert nur die laufende Summe) und
+  veröffentlicht das Ergebnis `R`, wenn alle hochgeladen haben. Die Masken heben sich auf; in `R`
+  stehen alle Rollen-Schlüssel – **ohne Absender**.
+- Sortiert ergeben die Slots anonyme Positionen: Beschenkten-Positionen `0…n-1` aus E und, für
+  jeden gültigen Versuch t, Schenker-Positionen `0…n-1` aus S_t.
 
-**Kollision** (zwei wählen zufällig denselben Slot, ~3 %): Die Prüfung schlägt bei allen fehl, alle
-Clients gehen automatisch zu Runde `r+1` über. Das passiert, **bevor** irgendjemand ein Ergebnis
-kennt, ist also unbedenklich und im Live-Modus unsichtbar.
+Kollidieren zwei Teilnehmer in Bereich E (~3 %), ist die ganze Runde ungültig; alle Clients gehen
+automatisch zu Runde `r+1` über. Eine Kollision in einem S_t macht nur diesen Versuch ungültig.
+Beides passiert, **bevor** irgendjemand ein Ergebnis kennt.
 
-**Störer** (jemand schickt absichtlich kaputte Daten) werden **bewusst nicht abgewehrt**: Sie können
-die Verlosung blockieren, aber nichts herausfinden. Nach 3 gescheiterten Runden zeigt die UI einen
-Hinweis („Die Verlosung klappt nicht – trefft euch zur Live-Verlosung“).
+### 6.2 Die Auslosung (offen, mit T Versuchen)
 
-### 6.2 Die Auslosung
+Aus `R` wird eine gemeinsame Zufallszahl abgeleitet: `ρ = SHA-256("sigma" ‖ G_r ‖ R)`. Für jeden
+Versuch t berechnet jeder Client dieselbe **gleichverteilte Permutation**
+`σ_t = FisherYates(ChaCha20(ρ ‖ t))`: Schenker-Position p in Versuch t beschenkt
+Beschenkten-Position `σ_t(p)`.
 
-Die gültigen Slots, aufsteigend sortiert, ergeben anonyme Positionen `0 … n-1`. Aus dem Ergebnis
-wird eine gemeinsame Zufallszahl abgeleitet: `ρ = SHA-256("sigma" ‖ G_r ‖ R)`. Damit berechnet jeder
-Client deterministisch dieselbe **gleichverteilte fixpunktfreie Permutation** σ:
-Fisher-Yates-Mischen mit ChaCha20(ρ) als Zufallsquelle, Wiederholen bis kein Fixpunkt
-(im Mittel ~2,7 Versuche, ohne Modulo-Bias).
+Ob sich in Versuch t jemand selbst zieht, weiß nur der Betroffene selbst. Das wird im nächsten
+Schritt **anonym** abgefragt. Gewählt wird der **erste** gültige Versuch `t*`, in dem sich niemand
+selbst zieht. Pro Versuch klappt das mit ≈ 32 % (≈ 37 % kein Selbstzug × ≈ 88 % keine Kollision).
+Dass alle 16 Versuche scheitern, kommt in ≈ 0,2 % der Fälle vor; dann folgt automatisch Runde `r+1`.
 
-**Position `k` beschenkt Position `σ(k)`.** Weil die Positionen gleichverteilt zufällig und anonym
-sind und σ eine gleichverteilte fixpunktfreie Permutation ist, ist auch die Zuordnung zwischen den
-Personen eine gleichverteilt zufällige fixpunktfreie Zuordnung – wie beim Ziehen aus dem Hut mit
-der Regel „zieh dich nicht selbst“. **Gegenseitiges Beschenken ist möglich.**
+**Warum frische Schenker-Rollen pro Versuch?** Würde man dieselben Rollen mehrfach auslosen,
+verriete jeder gescheiterte Versuch („hier hat sich jemand selbst gezogen“) etwas über die
+Verbindung der Rollen. Das ließ sich in einer Simulation bei 4 Personen in ~8 % der Fälle bis zur
+Gewissheit ausnutzen. Mit frischen Schenker-Rollen sind gescheiterte Versuche statistisch
+unabhängig vom gewählten Versuch. Eine exakte Auszählung für n = 4 und 5 bestätigt: Was ein
+Teilnehmer über „sind wir ein gegenseitiges Paar?“ weiß, entspricht genau der allgemeinen
+Grundwahrscheinlichkeit, mehr nicht.
 
-### 6.3 Schritt 2 – Enthüllung an den (unbekannten) Schenker
+### 6.3 Schritt 2 – Selbstzug-Abfrage und Enthüllung (ein Upload)
 
-Teilnehmer `i` auf Position `k` lädt **genau einen** Chiffretext hoch, verschlüsselt an das Pseudonym
-seines Schenkers `PDH_{σ⁻¹(k)}`:
+Teilnehmer `i` mit Beschenkten-Position `e_i` und Schenker-Positionen `p_{i,t}` lädt in **einem**
+Upload hoch:
 
-- **HPKE** (RFC 9180) im **Auth-Modus**, X25519-HKDF-SHA256 / ChaCha20-Poly1305, Absenderschlüssel
-  `idh_i` ⇒ der Schenker weiß sicher: „das kommt von Identität `pid_i`“.
-- Klartext: `pid_i ‖ MAC_{X25519(pdh_k, PDH_{σ⁻¹(k)})}(G_r ‖ "claim" ‖ pid_i) ‖ optionale private Notiz`,
-  aufgefüllt auf feste Länge `L = 512 B`. Der MAC beweist: „Identität `pid_i` besitzt das
-  Pseudonym auf Position `k`“.
-- `info = G_r ‖ "reveal"`.
+1. **Anonyme Selbstzug-Meldung**: ein zweites, kleines DC-Netz mit T Slots à 16 B. In Slot t
+   schreibt `i` 16 Zufallsbytes, wenn `σ_t(p_{i,t}) = e_i` (er würde sich selbst ziehen), sonst
+   nichts. Nach dem XOR aller Beiträge ist Slot t genau dann ≠ 0, wenn sich in Versuch t
+   *irgendwer* selbst zieht – aber niemand erfährt, wer.
+2. **Je Versuch eine Enthüllung** (T Chiffretexte): an den Schenker-Schlüssel
+   `GP_t` der Position `σ_t⁻¹(e_i)`, per **HPKE** (RFC 9180) im **Auth-Modus** (X25519-HKDF-SHA256 /
+   ChaCha20-Poly1305) mit Absenderschlüssel `idh_i`. Klartext:
+   `pid_i ‖ MAC_{X25519(rp_i, GP)}(G_r ‖ t ‖ "claim" ‖ pid_i) ‖ optionale private Notiz`, aufgefüllt
+   auf `L = 512 B`. Für ungültige Versuche: Zufallsbytes gleicher Länge.
+
+Der Server berechnet, sobald alle hochgeladen haben, das XOR der Selbstzug-Meldungen, bestimmt `t*`
+und **gibt nur die n Enthüllungen von Versuch `t*` frei**. Alle anderen löscht er.
 
 HPKE mit DHKEM ist **key-private**: Am Chiffretext ist nicht erkennbar, an welchen Schlüssel er
-gerichtet ist. Der Server sieht also n gleich große Uploads von n Personen – sonst nichts. Erst wenn
-alle hochgeladen haben, gibt er sie frei. **Jeder Client lädt alle n herunter** und probiert sie
-durch. Erwartet wird **genau einer**, der sich entschlüsseln lässt und dessen MAC stimmt.
+gerichtet ist. **Jeder Client lädt alle n Enthüllungen herunter** (kein positionsabhängiges
+Zugriffsmuster) und probiert sie mit seinem `gp_{t*}` durch. Genau eine lässt sich öffnen, und
+ihr MAC stimmt. Ergebnis: „Du beschenkst `name(pid_j)`“ + optionale private Notiz (z. B.
+Lieferadresse). Weil MAC statt Signatur verwendet wird, kann der Schenker das Ergebnis **niemandem
+beweisen** (Abstreitbarkeit).
 
-Ergebnis: „Du beschenkst `name(pid_j)`“ (Name entschlüsselt mit `GK`) + optionale private Notiz
-(z. B. Lieferadresse, die so nur der Schenker sieht). Weil MAC statt Signatur verwendet wird, kann
-der Schenker das Ergebnis **niemandem beweisen** (Abstreitbarkeit).
-
-Erhält jemand 0 oder ≥ 2 gültige Nachrichten (Fehler oder Störer), zeigt die UI einen Fehler. Einen
-Neustart kann **nur der Spielleiter** auslösen, sichtbar für alle („Verlosung Nr. 2“).
+Erhält jemand 0 oder ≥ 2 gültige Enthüllungen (Fehler oder Störer), zeigt die UI einen Fehler. Eine
+Neuverlosung kann **nur der Spielleiter** auslösen, sichtbar für alle („Verlosung Nr. 2“).
 
 ### 6.4 Neu auslosen – nur bei Austritt
 
@@ -180,37 +197,37 @@ Teilnehmerliste ändert:
 | während der Verlosung (noch kein Ergebnis) | Person wird entfernt, Verlosung startet neu – unbedenklich, niemand kennt etwas |
 | nach der Verlosung | Spielleiter entfernt die Person ⇒ **komplett neue Verlosung** für alle; die UI warnt vorher („Alle bekommen eine neue Person zugelost“) |
 
-Die automatische Folgerunde bei Kollisionen (6.1) zählt nicht als Neu-Auslosen, weil zu dem
-Zeitpunkt noch niemand ein Ergebnis kennt.
+Automatische Folgerunden (Kollision in Bereich E, alle T Versuche gescheitert) zählen nicht als
+Neu-Auslosen, weil zu dem Zeitpunkt noch niemand ein Ergebnis kennt.
 
 ### 6.5 Besuche
 
 | Phase | Wer | Voraussetzung |
 |---|---|---|
 | Beitritt | jeder | – |
-| DC-Netz-Upload | jeder | Spielleiter hat gestartet |
-| Enthüllungs-Upload | jeder | alle DC-Uploads da und gültig |
+| DC-Netz-Upload (Rollen) | jeder | Spielleiter hat gestartet |
+| Selbstzug-Meldung + Enthüllungen | jeder | alle Rollen-Uploads da |
 | Ergebnis abrufen | jeder | alle Enthüllungen da |
 
 Im **Live-Modus** läuft das in Sekunden ab (Server-Sent Events). Im **Asynchron-Modus** braucht
-jeder bis zu 4 Besuche; jeder Besuch erledigt automatisch alles Mögliche. Fehlt jemand dauerhaft,
-entfernt ihn der Spielleiter (siehe 6.4).
+jeder bis zu 4 Besuche; jeder Besuch erledigt automatisch alles Mögliche. In ≈ 3 % der Fälle
+(Kollision in Bereich E) kommt ein Durchgang hinzu. Fehlt jemand dauerhaft, entfernt ihn der
+Spielleiter (siehe 6.4).
 
 ### 6.6 Was lernt wer?
 
-- **Server/Spielleiter** (passiv): Teilnehmerzahl, öffentliche Schlüssel, Zeitpunkte, Fortschritt.
-  Keine Zuordnung. Der Spielleiter kennt `GK` und damit die Namen – der Server allein nicht.
-- **Teilnehmer**: den eigenen Beschenkten. Weil σ öffentlich ist, kennt jeder seine Position und die
-  seines Beschenkten. **Folge des gegenseitigen Beschenkens:** Beschenken sich zwei gegenseitig, sehen
-  beide an σ, dass ihr Beschenkter auch ihr Schenker ist. Pro Verlosung kommt das mit
-  ≈ 40 % Wahrscheinlichkeit bei mindestens einem Paar vor. Die UI zeigt es dann ehrlich an
-  („Ihr beschenkt euch gegenseitig“), statt so zu tun, als wäre es geheim. Sonst erfährt niemand
-  seinen Schenker.
-- **Koalitionen**: Verbündete kennen σ und ihre eigenen Positionen. Daraus können sie einzelne
-  Kanten in ihrer Nähe ablesen (z. B. „der Beschenkte von A beschenkt B“), aber keine darüber hinaus.
-  Mit Lesezugriff auf die Datenbank könnte der zuletzt Hochladende σ durch Ausprobieren
-  beeinflussen. Das bringt ihm höchstens eine solche Kante und wird als Restrisiko akzeptiert.
-- **n = 3**: Jeder kennt die komplette Zuordnung (gilt für *jedes* Verfahren). Deshalb **n ≥ 4**.
+- **Server/Spielleiter** (passiv): Teilnehmerzahl, öffentliche Schlüssel, Zeitpunkte, Fortschritt,
+  welcher Versuch gewählt wurde. Keine Zuordnung. Der Spielleiter kennt `GK` und damit die Namen –
+  der Server allein nicht.
+- **Teilnehmer**: nur den eigenen Beschenkten. **Niemand erfährt seinen Schenker – auch nicht in
+  einem gegenseitigen Paar.** Was bleibt, ist die allgemein bekannte Grundwahrscheinlichkeit
+  (z. B. bei 10 Personen beschenkt der eigene Beschenkte einen mit ≈ 10 % zurück).
+- **Koalitionen**: Verbündete kennen ihre eigenen Kanten. Weil die Rollen anderer nicht mit
+  Personen verknüpfbar sind, lernen sie darüber hinaus nur, was sich aus der Zählung ergibt (siehe
+  n = 4 unten).
+- **Kleine Gruppen**: Bei n = 3 kennt jeder die komplette Zuordnung, bei n = 4 lässt sich mit dem
+  eigenen Ergebnis oft viel ausschließen. Das gilt für **jedes** Verfahren. Deshalb **n ≥ 4** und
+  ein Hinweis bei n ≤ 5.
 - **Grenze**: Ein *aktiv* bösartiger Server kann manipulierten Code ausliefern (siehe Review A1).
   Der Schutz vor dem Spielleiter gilt nur, wenn der Spielleiter **nicht** zugleich Betreiber ist.
 
@@ -261,11 +278,11 @@ Server-Equivocation und einem statistischen Test auf Gleichverteilung der Zuordn
 | `POST /api/groups/{gid}/participants` | – | beitreten (`IPK`, `IDH`, `auth_hash`, `enc_name`, `enc_wish` |
 | `DELETE /api/groups/{gid}/participants/{pid}` | Admin oder selbst | entfernen / austreten (nur vor Start bzw. löst Neustart aus) |
 | `POST /api/groups/{gid}/start` | Admin | Liste einfrieren, Runde 1 starten |
-| `PUT /api/groups/{gid}/rounds/{r}/dcnet` | Teilnehmer | Vektor `V_i` (signiert) |
+| `PUT /api/groups/{gid}/rounds/{r}/dcnet` | Teilnehmer | Rollen-Vektor `V_i` (signiert) |
 | `GET /api/groups/{gid}/rounds/{r}/dcnet` | – | `R`, erst wenn vollständig |
-| `PUT /api/groups/{gid}/rounds/{r}/reveal` | Teilnehmer | **ein** Chiffretext (signiert) |
-| `GET /api/groups/{gid}/rounds/{r}/reveal` | – | alle `n` Chiffretexte, erst wenn vollständig |
-| `POST /api/groups/{gid}/rounds/{r}/next` | Teilnehmer | „Kollision erkannt“ ⇒ Runde `r+1` (nur vor Freigabe der Enthüllungen erlaubt; ohne Inhalt) |
+| `PUT /api/groups/{gid}/rounds/{r}/reveal` | Teilnehmer | Selbstzug-Meldung (T × 16 B, maskiert) + T Chiffretexte (signiert) |
+| `GET /api/groups/{gid}/rounds/{r}/reveal` | – | `t*` und die `n` Chiffretexte von Versuch `t*`, erst wenn vollständig |
+| `POST /api/groups/{gid}/rounds/{r}/next` | Teilnehmer | „Kollision in Bereich E“ ⇒ Runde `r+1` (nur vor Freigabe der Enthüllungen; ohne Inhalt; Server prüft selbst nach) |
 | `POST /api/groups/{gid}/restart` | Admin | neue Verlosung (nach Austritt oder Fehler; sichtbar, gezählt) |
 | `GET /api/groups/{gid}/events` | – | SSE: Zustandsänderungen (für Live-Modus) |
 
@@ -279,15 +296,16 @@ groups(gid TEXT PK, admin_hash BLOB, enc_meta BLOB, state TEXT, round INT,
        roster_hash BLOB, created_at INT, expires_at INT)
 participants(gid, pid, ipk BLOB, idh BLOB, auth_hash BLOB, enc_name BLOB,
              enc_wish BLOB, joined_at INT, PRIMARY KEY(gid, pid))
-dcnet_uploads(gid, round, pid, vector BLOB)          -- wird nach Berechnung von R gelöscht
-dcnet_results(gid, round, result BLOB)
-reveal_uploads(gid, round, pid, ciphertext BLOB)
+dcnet_rounds(gid, round, aggregate BLOB, submitted TEXT)  -- laufendes XOR + wer schon hochgeladen hat
+selfdraw_rounds(gid, round, aggregate BLOB, submitted TEXT)
+reveal_uploads(gid, round, pid, attempt INT, ciphertext BLOB) -- nach Bestimmung von t* nur t* behalten
 ```
 
-Größen: n = 20 ⇒ `m = 6400` Slots à 40 B ⇒ 256 KB pro DC-Vektor; Enthüllung 1 × ~0,6 KB pro
-Teilnehmer. Obergrenze **n ≤ 50** (DC-Vektor ≈ 1,6 MB, ~80 MB Keystream je Client – im Web Worker
-unter einer Sekunde); empfohlen ≤ 30.
-Gelöschte Vektoren dürfen nicht in Freelist/WAL weiterleben: `PRAGMA secure_delete = ON` +
+Größen (T = 16): n = 20 ⇒ Rollen-Vektor ≈ 1,1 MB (Bereich E 256 KB + 16 × 51 KB), Enthüllungen
+≈ 10 KB pro Teilnehmer. Obergrenze **n ≤ 30** (Rollen-Vektor ≈ 2,4 MB hoch und ≈ 2,4 MB `R`
+herunter; ~70 MB Keystream je Client – im Web Worker etwa eine Sekunde). Server-Speicher pro
+Runde: nur das laufende XOR, also eine Vektorgröße unabhängig von n.
+Gelöschte Daten (verworfene Enthüllungen, abgelaufene Gruppen) dürfen nicht in Freelist/WAL weiterleben: `PRAGMA secure_delete = ON` +
 WAL-Checkpoint. **In Phase 0 prüfen, ob Turso das unterstützt**; sonst nach Löschungen periodisch
 `VACUUM`.
 
@@ -298,7 +316,8 @@ WAL-Checkpoint. **In Phase 0 prüfen, ob Turso das unterstützt**; sonst nach L�
 - Namen, Titel, Wunschzettel nur als Chiffretext (Schlüssel im URL-Fragment).
 - Keine IP-Adressen in Logs (Tracing ohne Peer-Adresse; Reverse-Proxy-Logs ebenfalls aus/anonymisiert).
 - Keine externen Ressourcen (Fonts, CDN, Analytics). Strikte CSP, `Referrer-Policy: no-referrer`.
-- Automatische Löschung nach Ablauf; DC-Vektoren sofort nach Berechnung von `R`.
+- Automatische Löschung nach Ablauf; einzelne DC-Vektoren werden nie gespeichert (laufendes XOR),
+  Enthüllungen nicht gewählter Versuche sofort gelöscht.
 - Rate-Limits und Größenlimits gegen Missbrauch als anonymer Speicher.
 
 ## 8. Datenbank: Turso, lokal eingebettet

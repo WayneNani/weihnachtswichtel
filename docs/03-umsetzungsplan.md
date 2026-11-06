@@ -1,6 +1,6 @@
 # Weihnachtswichtel – Umsetzungsplan mit parallelen Subagents
 
-Stand: 2026-11-06 · Grundlage: `01-konzept.md` v3 inkl. der Entscheidungen aus `02-review.md` §G
+Stand: 2026-11-06 · Grundlage: `01-konzept.md` v4 inkl. der Entscheidungen aus `02-review.md` §G
 
 ## 1. Leitplanken für die Maschinenlast
 
@@ -88,26 +88,32 @@ Phase 4                                                                   └─
 **A1 „core“** 🦀 — `crates/wichtel-core`
 - Schlüsselableitung aus `seed` (alle Rundenschlüssel deterministisch), Gruppenkontext `G_r`,
   AEAD mit AAD für `GK`-Daten, Low-Order-Prüfung.
-- DC-Netz: Pads, Vektor, Slot per Rejection-Sampling, Ergebnis-Parsing, Kollisionserkennung.
-- **Auslosung σ**: deterministische, gleichverteilte fixpunktfreie Permutation aus `ρ`
-  (Fisher-Yates mit ChaCha20, Rejection bis fixpunktfrei, ohne Modulo-Bias).
-- Enthüllung (HPKE-Auth an `PDH_{σ⁻¹(k)}`, DH-MAC, Padding), Auswertung, Erkennung
-  „gegenseitiges Paar“ für die UI.
+- DC-Netz mit Bereich E (Beschenkten-Rollen) und T Bereichen S_t (frische Schenker-Rollen):
+  Pads, Vektor, Slots per Rejection-Sampling, Parsing, Gültigkeit je Bereich/Versuch.
+- **Auslosung**: `σ_t` als gleichverteilte Permutation aus `ρ ‖ t` (Fisher-Yates mit ChaCha20, ohne
+  Modulo-Bias); eigene Selbstzug-Erkennung je Versuch.
+- Zweites DC-Netz für die anonyme Selbstzug-Meldung (T × 16 B), Bestimmung von `t*`.
+- Enthüllung je Versuch (HPKE-Auth an `GP_t` von `σ_t⁻¹(e_i)`, DH-MAC mit `rp`, Padding),
+  Auswertung für `t*`.
 - **Protokoll-Simulation** als Test: n ∈ {4, 5, 7, 20, 50} Clients + In-Memory-Briefkasten;
   Szenarien: Normalfall, Kollision (⇒ Folgerunde), Austritt vor/während/nach der Verlosung
   (⇒ Neuverlosung), Server-Equivocation (verschiedene Rosters ⇒ Abbruch), vertauschte `enc_name`
   (⇒ abgelehnt), kaputter Vektor (⇒ Runde scheitert sauber, kein Leak, kein Panic).
   Property-Test: Ergebnis ist eine fixpunktfreie Permutation über alle; jeder erfährt genau seinen
-  Beschenkten.
+  Beschenkten; kein Client-Zustand verrät den eigenen Schenker.
 - Statistik-Test (`#[ignore]` per Default, einmal manuell): Für n = 4 kommen alle 9
-  fixpunktfreien Zuordnungen gleich häufig vor (χ²-Test); Anteil gegenseitiger Paare ≈ 33 %.
+  fixpunktfreien Zuordnungen gleich häufig vor (χ²-Test).
+- **Leck-Test** (Portierung von `docs/analysis/leak_check.py`): Für n = 4 rechnet ein
+  „neugieriger Teilnehmer“ aus allen öffentlichen Daten seine Wahrscheinlichkeit für ein
+  gegenseitiges Paar aus. Sie muss in jedem Lauf exakt der Grundwahrscheinlichkeit 1/3 entsprechen.
 - Testvektoren-Datei für A4/A5.
 
 **A2 „server“** 🦀 — `crates/wichtel-server`
 - axum-Routen gemäß `wichtel-api`, Zustandsautomat, Auth (Hash-Vergleich in konstanter Zeit),
   Signaturprüfung der Uploads (nutzt nur die Verify-Funktion aus `core` – bis A1 fertig: Feature-Flag/Stub).
 - `Store`-Trait + `TursoStore` (Crate `turso`, lokale Datei, Migrations als SQL-Dateien) – Erkenntnisse aus dem Turso-Spike beachten.
-- XOR-Aggregation der DC-Vektoren, Freigabe erst bei Vollständigkeit, Vektoren danach löschen
+- Laufende XOR-Aggregation der DC-Vektoren (Einzelvektoren nie speichern), Freigabe erst bei
+  Vollständigkeit; Selbstzug-Aggregat ⇒ `t*`, nur Enthüllungen von `t*` freigeben, Rest löschen
   (`secure_delete` bzw. `VACUUM`); Folgerunde bei Kollision nur vor Freigabe der Enthüllungen;
   Neuverlosung nur durch Admin (nach Austritt/Fehler), Zähler öffentlich.
 - SSE-Endpunkt, Größen- und Rate-Limits, Ablauf-/Lösch-Job.

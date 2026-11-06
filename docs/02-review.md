@@ -181,25 +181,43 @@ auslösen, sobald Ergebnisse freigegeben sind. Automatische Folgerunden gibt es 
 *vor* jeder Freigabe. Eine neue Verlosung startet nur der Spielleiter, und zwar wenn jemand austritt
 oder ein technischer Fehler auftritt. Das ist für alle sichtbar und wird mitgezählt.
 
-Restrisiko: Ein Spielleiter mit DB-Lesezugriff, der mit einem Teilnehmer zusammenarbeitet, könnte
-als Letzter hochladen und σ durch Ausprobieren beeinflussen (G3). Gewinn: höchstens eine
-Schenker→Beschenkter-Kante in der Nähe der Verbündeten. Akzeptiert.
+Restrisiko: siehe G3 (Beeinflussung von `ρ` durch den letzten Uploader).
 
-### G3 Freie Auslosung statt Kreis
-Gewünscht: jede fixpunktfreie Zuordnung, also auch gegenseitiges Beschenken. Umsetzung: Die anonymen
-Positionen aus dem DC-Netz bleiben. Statt „k beschenkt k+1“ wird **öffentlich** eine gleichverteilte
-fixpunktfreie Permutation σ aus `R` abgeleitet. Weil die Positionen anonym und gleichverteilt sind,
-ist die Zuordnung zwischen Personen gleichverteilt fixpunktfrei, wie beim Ziehen aus dem Hut.
+### G3 Freie Auslosung, gegenseitige Paare unsichtbar
+Gewünscht ist jede fixpunktfreie Zuordnung, also auch gegenseitiges Beschenken. **Niemand soll
+erkennen können, dass er in einem gegenseitigen Paar ist.**
 
-**Preis, bewusst akzeptiert:** σ ist öffentlich. Beschenken sich zwei gegenseitig, *wissen* beide
-das, denn ihr Schenker ist dann sichtbar ihr Beschenkter. Das passiert pro Verlosung mit
-≈ 33–45 % Wahrscheinlichkeit bei mindestens einem Paar (exakt nachgezählt für n = 4…8, gegen
-1 − e^(−1/2) ≈ 39 % konvergierend). Die UI zeigt das offen an. Alle anderen erfahren ihren Schenker
-nicht. Ein verborgenes σ, bei dem jeder nur den eigenen Beschenkten erfährt, bräuchte ein echtes
-MPC-Protokoll mit sequentiellen Runden und ist nicht verhältnismäßig.
+**Verworfener Zwischenstand (v3):** eine anonyme Position pro Person, dazu eine öffentliche
+fixpunktfreie Permutation σ. Problem: Wer A beschenkt und von A beschenkt wird, sieht das direkt an
+σ. Das trifft pro Verlosung in ≈ 33–45 % der Fälle mindestens ein Paar.
 
-Unverändert: **n ≥ 4** (bei n = 3 gibt es nur zwei fixpunktfreie Zuordnungen, jeder kennt alles).
-Bei n = 4 kennt mit dem eigenen Ergebnis und σ oft jemand fast alles; die UI warnt bei n ≤ 5.
+**Lösung (v4):** Jeder hat **zwei unverknüpfbare anonyme Rollen**, eine als Beschenkter und eine als
+Schenker. Zwischen den Rollen wird offen mit einer gleichverteilten Permutation gelost. Selbstzüge
+erkennt nur der Betroffene; sie werden über ein kleines zweites DC-Netz **anonym** gemeldet, und
+der erste Versuch ohne Selbstzug gilt. Damit ist das Ergebnis eine gleichverteilte fixpunktfreie
+Zuordnung.
+
+**Gefundene und behobene Falle:** Verwendet man in allen Versuchen dieselben Schenker-Rollen,
+verraten die gescheiterten Versuche etwas über die Verknüpfung der Rollen. Eine Simulation zeigte:
+Bei n = 4 kann ein Teilnehmer in ~8 % der Verlosungen **sicher** auf ein gegenseitiges Paar
+schließen, bei n = 5 in ~2 %. Deshalb bekommt jeder Versuch **frische Schenker-Rollen**. Eine
+exakte Auszählung (n = 4, 5) bestätigt dann: Das Wissen eines Teilnehmers über „gegenseitig?“
+entspricht immer genau der Grundwahrscheinlichkeit (n = 4: 33 %, n = 5: 18 %, n = 10: 10 %).
+
+**Preis:** größere Uploads (T = 16 Versuche ⇒ n = 20: ≈ 1,1 MB statt 256 KB; n = 30: ≈ 2,4 MB).
+Deshalb Obergrenze **n ≤ 30**. Die Zahl der Besuche bleibt gleich, weil Selbstzug-Meldung und
+Enthüllung in einem Upload zusammengefasst sind.
+
+**Nebeneffekt:** Das Koalitionsproblem aus F4 (Verbündete kennen ihren Abstand im Kreis) entfällt.
+Weil die Rollen anderer nicht mit Personen verknüpfbar sind, lernen Verbündete nur ihre eigenen
+Kanten.
+
+Restrisiko: Ein Spielleiter mit DB-Lesezugriff, der mit einem Teilnehmer zusammenarbeitet, kann als
+Letzter hochladen und `ρ` durch Ausprobieren beeinflussen. Er kann damit aber keine bestimmte Person
+ansteuern, weil die Rollen anonym sind. Akzeptiert.
+
+Unverändert: **n ≥ 4**, Hinweis bei n ≤ 5 (kleine Gruppen verraten durch reines Abzählen viel – bei
+jedem Verfahren).
 
 ### G4 Neu auslosen nur bei Austritt
 Austritt nach der Verlosung ⇒ **komplette Neuverlosung** für alle, mit Warnung vorab. Eine
