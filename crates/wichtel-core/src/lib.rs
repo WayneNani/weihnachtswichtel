@@ -13,8 +13,6 @@
 //! - [`draw`]: `ρ`, `σ_t` and unbiased sampling (Spec §7.2, §8)
 //! - [`reveal`]: self-draw vector, reveals, choice of `t*`, result (Spec §9)
 
-// Phase 0 skeleton: bodies are `todo!()`. Remove this allow once implemented (agent A1).
-#![allow(unused_variables)]
 #![forbid(unsafe_code)]
 
 pub mod dcnet;
@@ -23,6 +21,7 @@ pub mod gk;
 pub mod keys;
 pub mod reveal;
 pub mod roster;
+mod util;
 pub mod wordlist;
 
 /// Minimum number of participants to start a draw (Spec §2).
