@@ -67,6 +67,18 @@ export function buildFragment(s: Secrets): string {
   return f;
 }
 
+/**
+ * Fragment to show in the address bar of a group page: GK and (if present) the admin secret, but
+ * the seed only if `keepSeed` – normally it lives in local storage, so the address bar (and
+ * history, synced history, a shared URL) only carries the invite/admin link.
+ */
+export function addressBarFragment(s: Secrets, keepSeed: boolean): string {
+  const shown: Secrets = { k: s.k };
+  if (s.a) shown.a = s.a;
+  if (keepSeed && s.s) shown.s = s.s;
+  return buildFragment(shown);
+}
+
 /** Parses pathname + hash into a route. Does not touch `window`. */
 export function parseRoute(pathname: string, hash: string): Route {
   if (pathname === "/" || pathname === "" || pathname === "/index.html") return { page: "home" };

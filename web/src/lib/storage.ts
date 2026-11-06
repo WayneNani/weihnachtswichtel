@@ -107,6 +107,22 @@ export function saveGroup(gidB64: string, patch: Partial<LocalGroup>): LocalGrou
   return next;
 }
 
+/**
+ * True if localStorage itself (not just the in-memory fallback) holds exactly this GK and seed for
+ * the group – only then may the seed be dropped from the address bar.
+ */
+export function seedPersisted(gidB64: string, k: Uint8Array, s: Uint8Array): boolean {
+  try {
+    const raw = globalThis.localStorage?.getItem(PREFIX + gidB64);
+    if (!raw) return false;
+    const v = JSON.parse(raw) as Partial<LocalGroup>;
+    return v.k === b64uEncode(k) && v.s === b64uEncode(s);
+  } catch {
+    return false;
+  }
+}
+
+/** Removes the group's localStorage record and extras (see forget.ts for the full cleanup). */
 export function forgetGroup(gidB64: string): void {
   rawDel(PREFIX + gidB64);
   for (const k of rawKeys()) if (k.startsWith(`wichtel:x:${gidB64}:`)) rawDel(k);

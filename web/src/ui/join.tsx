@@ -5,6 +5,7 @@ import { NAME_MAX, NOTE_MAX, WISH_MAX, type JoinRequest } from "../api/types";
 import { b64uEncode, utf8, utf8Len } from "../lib/bytes";
 import { authHash } from "../lib/hashes";
 import { loadGroup, saveGroup } from "../lib/storage";
+import { cleanName } from "../protocol/roster";
 import type { ParticipantKeysHandle, WichtelWasm } from "../wasm-api";
 import { CopyField, errorText, Modal, Notice } from "./common";
 import type { GroupController } from "./controller";
@@ -23,8 +24,8 @@ export function buildJoinRequest(wasm: WichtelWasm, gk: Uint8Array, gid: Uint8Ar
 }
 
 function validate(name: string, wish: string): string | null {
-  if (!name.trim()) return "Bitte gib deinen Namen ein.";
-  if (utf8Len(name.trim()) > NAME_MAX) return "Der Name ist zu lang.";
+  if (!cleanName(name)) return "Bitte gib deinen Namen ein.";
+  if (utf8Len(cleanName(name)) > NAME_MAX) return "Der Name ist zu lang.";
   if (utf8Len(wish) > WISH_MAX) return `Der Wunschzettel ist zu lang (höchstens ${WISH_MAX} Bytes).`;
   return null;
 }
@@ -68,7 +69,7 @@ export function JoinForm({ ctrl, onJoined, existingSeed }: { ctrl: GroupControll
     saveGroup(ctrl.gidB64, { k: b64uEncode(ctrl.currentSecrets.k), s: b64uEncode(seed), linkSaved: false });
     const keys = wasm.deriveKeys(seed, ctrl.gid);
     try {
-      const req = buildJoinRequest(wasm, ctrl.currentSecrets.k, ctrl.gid, keys, name.trim(), wish);
+      const req = buildJoinRequest(wasm, ctrl.currentSecrets.k, ctrl.gid, keys, cleanName(name), wish);
       try {
         const res = await api.join(ctrl.gidB64, req);
         if (res.pid !== b64uEncode(keys.pid)) throw new Error("Der Server hat eine unerwartete Teilnehmer-ID gemeldet.");
@@ -114,7 +115,7 @@ export function EditEntry({ ctrl, name: initialName, wish: initialWish, onDone }
     if (v) return setError(v);
     setBusy(true);
     try {
-      const req = buildJoinRequest(ctrl.wasm, ctrl.currentSecrets.k, ctrl.gid, keys, name.trim(), wish);
+      const req = buildJoinRequest(ctrl.wasm, ctrl.currentSecrets.k, ctrl.gid, keys, cleanName(name), wish);
       await ctrl.api.updateParticipant(ctrl.gidB64, b64uEncode(keys.pid), keys.authToken, req);
       await ctrl.refresh();
       onDone();
@@ -199,8 +200,8 @@ export function SaveLinkDialog({ open, link, forced, onClose }: { open: boolean;
         geht das nur auf diesem Gerät in diesem Browser.
       </p>
       <Notice kind="warn" title="Nicht in die Gruppe posten!">
-        Dieser Link gehört nur dir. Wer ihn hat, kann dein Ergebnis sehen. Speichere ihn als Lesezeichen, in einer
-        privaten Notiz oder schick ihn dir selbst.
+        Dieser Link gehört nur dir. Wer ihn hat, kann dein Ergebnis sehen. Kopiere ihn von hier in eine private Notiz,
+        als Lesezeichen oder schick ihn dir selbst.
       </Notice>
       <CopyField label="Dein persönlicher Link" value={link} qr share secret onCopied={() => setCopied(true)} />
       <label class="check">

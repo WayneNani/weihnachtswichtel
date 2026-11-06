@@ -3,6 +3,7 @@
  * connection (SSE, polling fallback) and runs the protocol driver whenever something changes.
  */
 import { ApiError, type Api } from "../api/client";
+import { forgetGroupOnDevice } from "../forget";
 import type { GroupMeta, GroupView } from "../api/types";
 import { b64uEncode } from "../lib/bytes";
 import type { Secrets } from "../lib/fragment";
@@ -79,6 +80,7 @@ export class GroupController {
   private driverDirty = false;
   private stopped = false;
   private lastRosterKey = "";
+  private forgotten = false;
   private onVisible = () => {
     if (document.visibilityState === "visible") void this.refresh();
   };
@@ -102,6 +104,10 @@ export class GroupController {
 
   get wasm(): WichtelWasm {
     return this.deps.wasm;
+  }
+
+  get kv(): KvStore {
+    return this.deps.kv;
   }
 
   get keysHandle(): ParticipantKeysHandle | null {
@@ -247,6 +253,12 @@ export class GroupController {
       if (e instanceof ApiError && e.status === 404) {
         this.set({ loading: false, notFound: true, view: null });
         this.es?.close();
+        // The group was deleted (by the Spielleiter or after the event): nothing here is of use
+        // any more – remove seed, note, cached results and push state from this device.
+        if (!this.forgotten) {
+          this.forgotten = true;
+          void forgetGroupOnDevice(this.gidB64, { kv: this.deps.kv });
+        }
         return;
       }
       this.set({ loading: false, problem: e instanceof ApiError && e.code === "network" ? "Keine Verbindung zum Server – neuer Versuch läuft …" : "Der Server antwortet gerade nicht richtig." });
@@ -332,6 +344,12 @@ export class GroupController {
         if (busy) this.set({ busy });
         const status = await this.driver.step(view, roster.entries, roster.allValid);
         this.set({ driver: status, busy: null });
+        if (status.kind === "result") {
+          // The draw is complete, so the note has reached the Schenker (in the step-2 upload of the
+          // final round): drop the plaintext from this device. Not right after the step-2 upload –
+          // a failed attempt (no t*) moves on to round r+1, which uploads the note again.
+          if (loadGroup(this.gidB64)?.note !== undefined) saveGroup(this.gidB64, { note: undefined });
+        }
         if (status.kind === "uploaded") {
           await this.refresh();
         } else if (status.kind === "retry") {

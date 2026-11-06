@@ -72,8 +72,10 @@ test("Szenario 1: Live-Modus mit 4 Teilnehmern", async () => {
       joined[p.label] = res;
       secrets[`s:${p.label}`] = res.seed;
       plaintexts.push(p.name, p.wish, p.note);
-      // Invite-link visitors get the personal link in the address bar (bookmarkable).
-      if (i > 0) assert.equal(new URL(dev.page.url()).hash, new URL(res.link).hash);
+      // The address bar never shows the seed: invite-link visitors keep the invite link (a bookmark
+      // of it works on this device with the stored seed); the personal link is only in the dialog.
+      if (i > 0) assert.equal(new URL(dev.page.url()).hash, new URL(group.invite).hash);
+      else assert.equal(new URL(dev.page.url()).hash, new URL(group.admin).hash);
       await setNote(dev, p.note);
     }
 
@@ -128,6 +130,12 @@ test("Szenario 1: Live-Modus mit 4 Teilnehmern", async () => {
     await fresh.goto(joined.p2.link);
     const again = await readResult(fresh);
     assert.equal(again.name, results[PEOPLE[1].name], "personal link reproduces the result on another device");
+    // The seed was taken over into local storage and dropped from the address bar …
+    assert.equal(new URL(fresh.page.url()).hash, new URL(group.invite).hash, "seed removed from the address bar");
+    // … and reloading that (invite) URL – like a bookmark – still shows the own result.
+    await fresh.page.reload();
+    const reloaded = await readResult(fresh);
+    assert.equal(reloaded.name, results[PEOPLE[1].name], "invite URL + stored seed shows the result after reload");
     // The note stays on the original device; the result itself is reproducible.
   }, server);
 });

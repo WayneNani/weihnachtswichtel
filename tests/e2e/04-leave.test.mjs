@@ -117,6 +117,11 @@ test("Szenario 4: Austritt nach dem Ergebnis führt zur Neuverlosung", async () 
     await adminPanel.getByRole("button", { name: "Runde endgültig löschen" }).click();
     await adminPanel.getByRole("button", { name: "Ja, alles löschen" }).click();
     for (const p of people.slice(1)) await p.dev.page.getByText("Diese Runde gibt es nicht (mehr)").waitFor({ timeout: 8_000 });
+    // … and forget the group on their device (seed, note, cached results).
+    for (const p of people.slice(1)) {
+      const rec = await p.dev.page.evaluate((gid) => localStorage.getItem(`wichtel:g:${gid}`), group.gid);
+      assert.equal(rec, null, `${p.name}: local record removed after the deletion`);
+    }
     const gone = await fetch(`${server.base}/api/groups/${group.gid}`);
     assert.equal(gone.status, 404);
 

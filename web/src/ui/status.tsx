@@ -61,6 +61,11 @@ export function RosterList(props: {
               <span class="roster-name">
                 {m.valid ? m.name : "⚠ ungültiger Eintrag"}
                 {m.pidB64 === myPid && <span class="tag tag-green">du</span>}
+                {m.valid && m.duplicate && (
+                  <span class="tag tag-red" title="Mehrere Einträge heißen gleich – fragt nach, wer wer ist.">
+                    ⚠ Name doppelt
+                  </span>
+                )}
               </span>
               {view.state === "drawing" && (
                 <span class={`roster-state ${submitted.has(m.pidB64) ? "ok" : "wait"}`}>

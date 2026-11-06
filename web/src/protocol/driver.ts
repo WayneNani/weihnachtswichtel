@@ -252,6 +252,16 @@ export class ProtocolDriver {
   }
 }
 
+/** IndexedDB key kinds written by the driver (`<kind>:<gid>:<pid>:<round>`). */
+const KV_KINDS = ["result", "eval", "disturb"] as const;
+
+/** Deletes everything the driver cached for a group on this device (all pids, all rounds). */
+export async function forgetDriverState(kv: KvStore, gidB64: string): Promise<void> {
+  for (const kind of KV_KINDS) {
+    for (const key of await kv.keys(`${kind}:${gidB64}:`)) await kv.del(key);
+  }
+}
+
 /** Runs the role-vector job on the current thread (fallback when no Worker is available). */
 export function computeRolesInline(wasm: WichtelWasm): (job: RolesJob) => Promise<RolesJobResult> {
   return async (job) => {

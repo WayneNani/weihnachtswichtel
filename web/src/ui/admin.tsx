@@ -3,8 +3,7 @@ import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import { N_MAX, N_MIN, type GroupMeta, type GroupView } from "../api/types";
 import { groupLink } from "../lib/fragment";
-import { forgetGroup } from "../lib/storage";
-import { forgetPush } from "../push";
+import { forgetGroupOnDevice } from "../forget";
 import { navigate } from "./app";
 import { CopyField, errorText, formatDate, formatDateTime, fromLocalInput, Notice, toLocalInput } from "./common";
 import type { GroupController } from "./controller";
@@ -178,8 +177,8 @@ export function AdminPanel({ ctrl, view, meta, adminSecret }: { ctrl: GroupContr
           onConfirm={() =>
             run(async () => {
               await ctrl.api.deleteGroup(ctrl.gidB64, adminSecret);
-              forgetGroup(ctrl.gidB64);
-              void forgetPush(ctrl.gidB64);
+              // The server deleted the subscriptions with the group; clean up this device.
+              void forgetGroupOnDevice(ctrl.gidB64, { kv: ctrl.kv });
               navigate("/");
             })
           }
