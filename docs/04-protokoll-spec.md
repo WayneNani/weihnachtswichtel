@@ -95,8 +95,11 @@ abgeleiteten 32 Byte werden unverändert als Secret übernommen.
 
 Beitritt: Der Client sendet `IPK, IDH, auth_hash, enc_name, enc_wish` und
 `join_sig = Ed25519-Sign(isk, H("wichtel/v1/join" ‖ gid ‖ IPK ‖ IDH ‖ auth_hash ‖ lp(enc_name) ‖ lp(enc_wish)))`.
-Der Server MUSS prüfen: Signatur gültig, `IDH` ist kein Punkt kleiner Ordnung (X25519 mit einem
-festen Testschlüssel ist beitragend), `pid` noch nicht vorhanden, Größenlimits.
+Der Server MUSS prüfen: Signatur gültig, `IDH` ist **kanonisch kodiert** (Bit 255 = 0 und
+`u < p = 2^255 − 19`, als Little-Endian-Zahl) und kein Punkt kleiner Ordnung (X25519 mit einem
+festen Testschlüssel ist beitragend), `pid` **und `IDH`** noch nicht in der Gruppe vorhanden,
+Größenlimits (`wichtel_core::keys::validate_idh` + Duplikatprüfung). Clients lehnen eine
+Teilnehmerliste mit ungültigem oder doppeltem `IDH` bzw. doppelter `pid` ab (`Roster::new`).
 
 Die **Roster-Reihenfolge** ist aufsteigend nach `pid` (Bytevergleich). Ein Roster-Eintrag ist
 `entry_i = pid_i ‖ IPK_i ‖ IDH_i ‖ H(enc_name_i)` (112 Byte).
@@ -140,7 +143,9 @@ schon im Request. Deshalb wird an Stelle der `gid` ein fester Nullwert `Z(16)` v
 schwächt nichts: `GK` ist pro Gruppe frisch und zufällig, ein vom Server untergeschobenes
 `enc_meta` einer anderen Gruppe ließe sich mit diesem `GK` nicht öffnen.
 
-Beim Öffnen MUSS `pad` geprüft werden (Länge ≤ Rest, Füllbytes = 0). Ein Eintrag, dessen Name
+Beim Öffnen MUSS `pad` geprüft werden; akzeptiert wird nur die **kanonische (minimale)** Form:
+`len(data) ≤ Limit`, Gesamtlänge genau `2 + len(data)` auf ein Vielfaches von 32 aufgerundet,
+Füllbytes = 0. Ein Eintrag, dessen Name
 sich nicht öffnen lässt, wird in der UI als „⚠ ungültiger Eintrag“ angezeigt; der Client DARF in
 einer Gruppe mit ungültigen Einträgen **nicht** an der Verlosung teilnehmen.
 
@@ -154,10 +159,14 @@ Für jedes Paar `i ≠ j`:
 dh_ij      = X25519(idh_i, IDH_j)                        (nicht beitragend ⇒ Fehler)
 lo, hi     = min(IDH_i, IDH_j), max(IDH_i, IDH_j)        (Bytevergleich)
 k^roles_ij = HKDF(salt = G_r, ikm = dh_ij, info = "wichtel/v1/dc-roles" ‖ lo ‖ hi, 32)
-k^sd_ij    = HKDF(salt = G_r, ikm = dh_ij, info = "wichtel/v1/dc-selfdraw" ‖ lo ‖ hi, 32)
+k^sd_ij    = HKDF(salt = G_r, ikm = dh_ij, info = "wichtel/v1/dc-selfdraw" ‖ ρ ‖ lo ‖ hi, 32)
 P^roles_ij = ChaCha20(k^roles_ij, Z(12))[0 .. L_V]
 P^sd_ij    = ChaCha20(k^sd_ij, Z(12))[0 .. L_SD]
 ```
+
+`ρ` (§8) hängt von `R` ab. Die Selbstzug-Masken sind damit an das veröffentlichte Aggregat
+gebunden: Zeigt ein Server verschiedenen Clients verschiedene `R` (Equivocation), entstehen
+verschiedene Masken statt eines Two-Time-Pads auf `SD`.
 
 ### 7.2 Slot-Wahl
 
@@ -234,16 +243,27 @@ Client MUSS abbrechen, wenn der Server ein anderes `t*` meldet.
 
 ### 9.2 Enthüllungen
 
-Deterministischer Zufall: `rng = ChaCha20Rng(rngkey_r)` (Strom `ChaCha20(rngkey_r, Z(12))`), in
-dieser Reihenfolge verbraucht: Versuche t = 1…16, je Versuch zuerst HPKE-Ephemeral bzw.
-Platzhalter.
+Alle Zufallswerte sind deterministisch (identische Wiederholung nach Neuladen):
+
+```
+padkey   = Expand(rngkey_r, "wichtel/v1/reveal-pad" ‖ ρ, 32)
+pad      = ChaCha20(padkey, Z(12))          (reiner ChaCha20-Schlüsselstrom, Zähler ab 0)
+eph_ikm  = Expand(rngkey_r, "wichtel/v1/reveal-eph" ‖ u8(t) ‖ ρ ‖ pkR ‖ H(pt), 32)
+```
+
+- Der Strom `pad` liefert **nur Platzhalter**, je 560 Bytes, in der Reihenfolge t = 1…16;
+  gültige, erfolgreich versiegelte Versuche verbrauchen nichts aus `pad`.
+- Das HPKE-Ephemeral eines gültigen Versuchs ist `DeriveKeyPair(eph_ikm)` (RFC 9180 §7.1.3, d. h.
+  `GenerateKeyPair` mit `eph_ikm` als Zufall). Weil `eph_ikm` vom Klartext `pt` abhängt, führen
+  zwei Aufrufe mit unterschiedlicher Notiz (zweites Gerät, Wiederholung mit geänderter Notiz) nie
+  zu AEAD-Nonce-Wiederverwendung.
 
 Für jeden Versuch `t = 1…16`:
 
-- **Ungültiger Versuch:** `C_{i,t}` = 560 Bytes aus `rng`.
+- **Ungültiger Versuch:** `C_{i,t}` = nächste 560 Bytes aus `pad`.
 - **Gültiger Versuch:** Schenker-Position `g = σ_t⁻¹(e_i)`, Zielschlüssel `pkR = GP_t[g]`.
   - `mac_key = HKDF(salt = G_r, ikm = X25519(rp_r, pkR), info = "wichtel/v1/claim-mac" ‖ u8(t), 32)`
-  - `mac = HMAC(mac_key, "wichtel/v1/claim" ‖ G_r ‖ u8(t) ‖ pid_i ‖ RP_r ‖ pkR)`
+  - `mac = HMAC(mac_key, "wichtel/v1/claim" ‖ G_r ‖ ρ ‖ u8(t) ‖ pid_i ‖ RP_r ‖ pkR)`
   - Klartext (genau 512 B):
 
     | Offset | Länge | Feld |
@@ -257,10 +277,12 @@ Für jeden Versuch `t = 1…16`:
 
   - HPKE (RFC 9180), **Mode Auth (0x02)**, Suite `DHKEM(X25519, HKDF-SHA256)` (0x0020),
     `HKDF-SHA256` (0x0001), `ChaCha20Poly1305` (0x0003);
-    `skS = idh_i`, `pkR`, `info = "wichtel/v1/reveal" ‖ G_r ‖ u8(t)`, `aad = ""`, Single-Shot-Seal.
+    `skS = idh_i`, `pkR`, `info = "wichtel/v1/reveal" ‖ G_r ‖ ρ ‖ u8(t)`, `aad = ""`,
+    Single-Shot-Seal, Ephemeral aus `eph_ikm` (s. o.).
   - `C_{i,t} = enc (32) ‖ ct (528)`.
-  - Schlägt die Kapselung fehl (z. B. `pkR` kleiner Ordnung), wird `C_{i,t}` wie bei einem
-    ungültigen Versuch aus `rng` gefüllt.
+  - Ist `X25519(rp_r, pkR)` nicht beitragend oder schlägt die Kapselung fehl (z. B. `pkR` kleiner
+    Ordnung), wird `C_{i,t}` wie bei einem ungültigen Versuch mit den nächsten 560 Bytes aus
+    `pad` gefüllt.
 
 Upload Schritt 2: `SD_i ‖ C_{i,1} ‖ … ‖ C_{i,16}` (256 + 16·560 = 9216 B), signiert (§12).
 
@@ -271,7 +293,7 @@ und **nur** die `n` Enthüllungen `(pid_j, C_{j,t*})`. Alle übrigen `C_{j,t}` M
 
 Client `i` (Schenker-Position `p = p_{i,t*}`, erwarteter Beschenkter `e = σ_{t*}(p)`):
 für jede freigegebene `(pid_j, C)`: HPKE-Open (Mode Auth, `skR = gp_{r,t*}`, `pkS = IDH_j`, gleiche
-`info`). Erfolgreich ⇒ Klartext prüfen: Version = 1, `pid` = `pid_j`, `len(note) ≤ 461`, Füllbytes = 0,
+`info` inkl. `ρ`). Erfolgreich ⇒ Klartext prüfen: Version = 1, `pid` = `pid_j`, `len(note) ≤ 461`, Füllbytes = 0,
 `mac` gegen `X25519(gp_{r,t*}, RP[e])` mit `pkR = GP_{r,t*}` und `RP[e]` neu berechnen (Vergleich in
 konstanter Zeit). **Genau eine** Enthüllung MUSS alle Prüfungen bestehen; das Ergebnis ist
 `(pid_j, note)`. Sonst Zustand „Störung“ (§11).
@@ -342,13 +364,17 @@ kind: 1 = Rollen-Vektor, 2 = Selbstzug + Enthüllungen
 
 Der Server MUSS Signatur, Länge (`L_V(n)` bzw. 9216) und Bearer-Token prüfen.
 
+`ρ` ist bewusst **nicht** Teil der Signatur: Die Upload-Signatur prüft nur der Server selbst, sie
+schützt also nicht gegen einen equivozierenden Server. Die Bindung an `R` erfolgt dort, wo sie
+wirkt: in den Selbstzug-Masken (§7.1), in HPKE-`info` und im Claim-MAC (§9.2).
+
 ## 13. Abweichungen vom Konzept v5
 
 | Konzept | Spezifikation | Grund |
 |---|---|---|
 | Fingerabdruck „6 Wörter“, ≥ 64 Bit | **8 Wörter** à 8 Bit aus 256er-Liste | 6 Wörter à 8 Bit wären nur 48 Bit |
 | Endpunkt `…/rounds/{r}/next` (Client meldet Kollision) | entfällt; **Server erkennt Kollision selbst** (§7.4) | Auswertung ist deterministisch und öffentlich; weniger Endpunkte, kein Missbrauch |
-| HPKE-Ephemeral zufällig | **deterministisch aus `seed`** (§9.2) | identische Wiederholung nach Neuladen, reproduzierbare Testvektoren |
+| HPKE-Ephemeral zufällig | **deterministisch aus `seed`, `ρ`, `pkR` und dem Klartext** (§9.2) | identische Wiederholung nach Neuladen, reproduzierbare Testvektoren; keine Nonce-Wiederverwendung bei geänderter Notiz |
 | `pid` vom Server vergeben | `pid = H(… ‖ IPK)[0..16]` | Client kennt `pid` ohne Server, Server kann keine IDs vertauschen |
 | Neuverlosung bei Austritt nur nach Ergebnis | auch in `Drawing` sofortige Neuverlosung | einheitliche Regel |
 

@@ -96,6 +96,56 @@ impl core::ops::DerefMut for SecretVec {
     }
 }
 
+/// "RNG" that hands out one fixed 32-byte value exactly once (deterministic HPKE ephemeral,
+/// Spec §9.2). Any other request yields zeros and is reported by [`OnceRng::consumed_exactly`].
+pub(crate) struct OnceRng<'a> {
+    value: &'a [u8; 32],
+    reads: usize,
+    exact: bool,
+}
+
+impl<'a> OnceRng<'a> {
+    pub(crate) fn new(value: &'a [u8; 32]) -> Self {
+        Self {
+            value,
+            reads: 0,
+            exact: true,
+        }
+    }
+
+    /// `true` iff exactly one 32-byte read happened.
+    pub(crate) fn consumed_exactly(&self) -> bool {
+        self.exact && self.reads == 1
+    }
+}
+
+impl TryRng for OnceRng<'_> {
+    type Error = Infallible;
+
+    fn try_next_u32(&mut self) -> core::result::Result<u32, Infallible> {
+        self.exact = false;
+        Ok(0)
+    }
+
+    fn try_next_u64(&mut self) -> core::result::Result<u64, Infallible> {
+        self.exact = false;
+        Ok(0)
+    }
+
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> core::result::Result<(), Infallible> {
+        if self.reads == 0 && dst.len() == 32 {
+            dst.copy_from_slice(self.value);
+        } else {
+            self.exact = false;
+            dst.fill(0);
+        }
+        self.reads += 1;
+        Ok(())
+    }
+}
+
+impl TryCryptoRng for OnceRng<'_> {}
+
 /// Deterministic byte stream `ChaCha20(key, Z(12))` usable as a `CryptoRng` (Spec §9.2).
 ///
 /// Bytes are handed out strictly in stream order without discarding anything, so the

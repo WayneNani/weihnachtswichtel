@@ -5,13 +5,15 @@ use hpke::kdf::HkdfSha256;
 use hpke::kem::X25519HkdfSha256;
 use hpke::{Deserializable, Kem as KemTrait, OpModeR, OpModeS, Serializable};
 use rand_core::Rng;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::dcnet::{OwnPositions, RolesOutcome, apply_pair_masks, round_ctx};
 use crate::draw::{invert, is_permutation, sigma};
 use crate::keys::{ParticipantKeys, ct_eq};
 use crate::roster::Roster;
-use crate::util::{KeystreamRng, SecretVec, hkdf32, hmac, x25519_checked};
+use crate::util::{
+    KeystreamRng, OnceRng, SecretVec, hkdf_expand, hkdf32, hmac, sha256, x25519_checked,
+};
 use crate::{
     Error, GroupId, L_CT, L_PT, L_REVEAL_UPLOAD, L_SD, NOTE_MAX, Pid, Result, SLOT_SD, T_ATTEMPTS,
 };
@@ -27,18 +29,21 @@ const OFF_NOTE: usize = 51;
 /// HPKE `enc` length.
 const L_ENC: usize = 32;
 
-/// `info = "wichtel/v1/reveal" ‖ G_r ‖ u8(t)`.
-fn hpke_info(g_r: &[u8; 32], t: u8) -> Vec<u8> {
-    let mut info = Vec::with_capacity(17 + 32 + 1);
+/// `info = "wichtel/v1/reveal" ‖ G_r ‖ ρ ‖ u8(t)`.
+fn hpke_info(g_r: &[u8; 32], rho: &[u8; 32], t: u8) -> Vec<u8> {
+    let mut info = Vec::with_capacity(17 + 32 + 32 + 1);
     info.extend_from_slice(b"wichtel/v1/reveal");
     info.extend_from_slice(g_r);
+    info.extend_from_slice(rho);
     info.push(t);
     info
 }
 
 /// Claim MAC (Spec §9.2): `dh` is `X25519(rp_r, pkR)` (sender) or `X25519(gp, RP)` (receiver).
+/// `mac = HMAC(mac_key, "wichtel/v1/claim" ‖ G_r ‖ ρ ‖ u8(t) ‖ pid ‖ RP ‖ pkR)`.
 fn claim_mac(
     g_r: &[u8; 32],
+    rho: &[u8; 32],
     t: u8,
     dh: &[u8; 32],
     pid: &Pid,
@@ -48,12 +53,68 @@ fn claim_mac(
     let mac_key = hkdf32(g_r, dh, &[b"wichtel/v1/claim-mac", &[t]]);
     hmac(
         &mac_key,
-        &[b"wichtel/v1/claim", g_r, &[t], &pid.0, rp, pk_r],
+        &[b"wichtel/v1/claim", g_r, rho, &[t], &pid.0, rp, pk_r],
     )
+}
+
+/// Reveal plaintext (Spec §9.2 table). Notes longer than `NOTE_MAX` are cut (callers check).
+fn plaintext(version: u8, pid: &Pid, mac: &[u8; 32], note: &[u8]) -> Zeroizing<[u8; L_PT]> {
+    let mut pt = Zeroizing::new([0u8; L_PT]);
+    pt[0] = version;
+    pt[OFF_PID..OFF_MAC].copy_from_slice(&pid.0);
+    pt[OFF_MAC..OFF_LEN].copy_from_slice(mac);
+    let len = note.len().min(NOTE_MAX);
+    // len ≤ NOTE_MAX < 2^16.
+    pt[OFF_LEN..OFF_NOTE].copy_from_slice(&(len as u16).to_be_bytes());
+    pt[OFF_NOTE..OFF_NOTE + len].copy_from_slice(&note[..len]);
+    pt
+}
+
+/// HPKE Auth seal of one reveal with the deterministic ephemeral (Spec §9.2):
+/// `eph_ikm = Expand(rngkey_r, "wichtel/v1/reveal-eph" ‖ u8(t) ‖ ρ ‖ pkR ‖ H(pt), 32)`,
+/// ephemeral key pair = `DeriveKeyPair(eph_ikm)` (RFC 9180 §7.1.3). Because the ephemeral
+/// depends on the plaintext, different notes never reuse an AEAD key/nonce.
+#[allow(clippy::too_many_arguments)]
+fn seal_reveal(
+    sk_s: &<Kem as KemTrait>::PrivateKey,
+    rng_key: &[u8; 32],
+    g_r: &[u8; 32],
+    rho: &[u8; 32],
+    t: u8,
+    pk_r: &[u8; 32],
+    pt: &[u8; L_PT],
+) -> Result<[u8; L_CT]> {
+    let pk_r_hpke =
+        <Kem as KemTrait>::PublicKey::from_bytes(pk_r).map_err(|_| Error::InvalidKey)?;
+    let mut eph_ikm = Zeroizing::new([0u8; 32]);
+    hkdf_expand(
+        rng_key,
+        &[b"wichtel/v1/reveal-eph", &[t], rho, pk_r, &sha256(&[pt])],
+        eph_ikm.as_mut(),
+    );
+    let mut eph_rng = OnceRng::new(&eph_ikm);
+    let (enc, ct) = hpke::single_shot_seal_with_rng::<ChaCha20Poly1305, HkdfSha256, Kem>(
+        &OpModeS::Auth((sk_s.clone(), Kem::sk_to_pk(sk_s))),
+        &pk_r_hpke,
+        &hpke_info(g_r, rho, t),
+        pt,
+        b"",
+        &mut eph_rng,
+    )
+    .map_err(|_| Error::InvalidKey)?;
+    if ct.len() + L_ENC != L_CT || !eph_rng.consumed_exactly() {
+        return Err(Error::InvalidLength);
+    }
+    let mut out = [0u8; L_CT];
+    out[..L_ENC].copy_from_slice(&enc.to_bytes());
+    out[L_ENC..].copy_from_slice(&ct);
+    Ok(out)
 }
 
 /// Build the step-2 upload body `SD_i ‖ C_{i,1} ‖ … ‖ C_{i,16}` (length `L_REVEAL_UPLOAD`).
 /// `note` is the optional private note for the giver (≤ `NOTE_MAX` bytes UTF-8).
+///
+/// Deterministic: the same inputs (including `note`) always give the same upload.
 #[allow(clippy::too_many_arguments)]
 pub fn build_reveal_upload(
     keys: &ParticipantKeys,
@@ -72,17 +133,18 @@ pub fn build_reveal_upload(
     let n = roster.len();
     check_outcome(outcome, own, n)?;
     let s = &ctx.secrets;
+    let rho = &outcome.rho;
     let pid = keys.public().pid;
 
     let mut body = Vec::with_capacity(L_REVEAL_UPLOAD);
 
-    // §9.1 self-draw vector.
-    let mut d = [0u8; L_SD];
+    // §9.1 self-draw vector (masks bound to ρ).
+    let mut d = Zeroizing::new([0u8; L_SD]);
     let sigmas: Vec<Option<Vec<u16>>> = (0..T_ATTEMPTS)
         .map(|i| {
             outcome.givers[i]
                 .as_ref()
-                .map(|_| sigma(&outcome.rho, i as u8 + 1, n))
+                .map(|_| sigma(rho, i as u8 + 1, n))
         })
         .collect();
     for (i, sig) in sigmas.iter().enumerate() {
@@ -97,67 +159,42 @@ pub fn build_reveal_upload(
         roster,
         ctx.own_index,
         &ctx.g_r,
-        b"wichtel/v1/dc-selfdraw",
-        &mut d,
+        &[b"wichtel/v1/dc-selfdraw", rho],
+        d.as_mut(),
     )?;
-    body.extend_from_slice(&d);
+    body.extend_from_slice(d.as_ref());
 
-    // §9.2 reveals.
+    // §9.2 reveals. Placeholders (invalid attempt or failed sealing) come from the stream
+    // ChaCha20(padkey, Z(12)) with padkey = Expand(rngkey_r, "wichtel/v1/reveal-pad" ‖ ρ, 32),
+    // 560 bytes per placeholder in the order t = 1…16; nothing else consumes this stream.
     let sk_s = <Kem as KemTrait>::PrivateKey::from_bytes(keys.idh_secret())
         .map_err(|_| Error::InvalidKey)?;
-    let pk_s = Kem::sk_to_pk(&sk_s);
-    let mut rng = KeystreamRng::new(&s.rng_key);
-    let mut pt = Zeroizing::new([0u8; L_PT]);
+    let mut pad_key = Zeroizing::new([0u8; 32]);
+    hkdf_expand(
+        &s.rng_key,
+        &[b"wichtel/v1/reveal-pad", rho],
+        pad_key.as_mut(),
+    );
+    let mut pad = KeystreamRng::new(&pad_key);
     for (i, (sig, givers)) in sigmas.iter().zip(&outcome.givers).enumerate() {
         let t = i as u8 + 1;
-        let (Some(sig), Some(givers)) = (sig, givers) else {
-            // Invalid attempt: placeholder from rng.
-            let start = body.len();
-            body.resize(start + L_CT, 0);
-            rng.fill_bytes(&mut body[start..]);
-            continue;
-        };
-        let g = usize::from(invert(sig)[own.e]);
-        let pk_r = givers[g];
-
-        // The HPKE ephemeral always consumes the first 32 bytes of rng for a valid attempt;
-        // if anything fails, the placeholder (560 B) follows from rng (see report / spec §9.2).
-        let sealed = x25519_checked(&s.rp, &pk_r).and_then(|dh| {
-            let mac = claim_mac(&ctx.g_r, t, &dh, &pid, &s.rp_pub, &pk_r);
-            pt.fill(0);
-            pt[0] = PT_VERSION;
-            pt[OFF_PID..OFF_MAC].copy_from_slice(&pid.0);
-            pt[OFF_MAC..OFF_LEN].copy_from_slice(&mac);
-            // note.len() ≤ NOTE_MAX < 2^16.
-            pt[OFF_LEN..OFF_NOTE].copy_from_slice(&(note.len() as u16).to_be_bytes());
-            pt[OFF_NOTE..OFF_NOTE + note.len()].copy_from_slice(note);
-            let pk_r =
-                <Kem as KemTrait>::PublicKey::from_bytes(&pk_r).map_err(|_| Error::InvalidKey)?;
-            hpke::single_shot_seal_with_rng::<ChaCha20Poly1305, HkdfSha256, Kem>(
-                &OpModeS::Auth((sk_s.clone(), pk_s.clone())),
-                &pk_r,
-                &hpke_info(&ctx.g_r, t),
-                pt.as_ref(),
-                b"",
-                &mut rng,
-            )
-            .map_err(|_| Error::InvalidKey)
-        });
-        match sealed {
-            Ok((enc, ct)) if ct.len() + L_ENC == L_CT => {
-                body.extend_from_slice(&enc.to_bytes());
-                body.extend_from_slice(&ct);
+        let sealed = match (sig, givers) {
+            (Some(sig), Some(givers)) => {
+                let pk_r = givers[usize::from(invert(sig)[own.e])];
+                x25519_checked(&s.rp, &pk_r).and_then(|dh| {
+                    let mac = claim_mac(&ctx.g_r, rho, t, &dh, &pid, &s.rp_pub, &pk_r);
+                    let pt = plaintext(PT_VERSION, &pid, &mac, note);
+                    seal_reveal(&sk_s, &s.rng_key, &ctx.g_r, rho, t, &pk_r, &pt)
+                })
             }
-            Ok(_) => return Err(Error::InvalidLength),
+            _ => Err(Error::NoValidAttempt),
+        };
+        match sealed {
+            Ok(c) => body.extend_from_slice(&c),
             Err(_) => {
-                if x25519_checked(&s.rp, &pk_r).is_err() {
-                    // HPKE was not reached: consume the ephemeral's 32 bytes anyway.
-                    let mut skip = Zeroizing::new([0u8; L_ENC]);
-                    rng.fill_bytes(skip.as_mut());
-                }
                 let start = body.len();
                 body.resize(start + L_CT, 0);
-                rng.fill_bytes(&mut body[start..]);
+                pad.fill_bytes(&mut body[start..]);
             }
         }
     }
@@ -205,12 +242,33 @@ pub fn select_attempt(outcome: &RolesOutcome, selfdraw_aggregate: &[u8]) -> Opti
         .map(|i| i as u8 + 1)
 }
 
-/// Final result of the local participant.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Final result of the local participant. Zeroized on drop; `Debug` is redacted.
+#[derive(Clone, PartialEq, Eq)]
 pub struct DrawResult {
     pub recipient: Pid,
     pub note: String,
 }
+
+impl core::fmt::Debug for DrawResult {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("DrawResult { <redacted> }")
+    }
+}
+
+impl Zeroize for DrawResult {
+    fn zeroize(&mut self) {
+        self.recipient.0.zeroize();
+        self.note.zeroize();
+    }
+}
+
+impl Drop for DrawResult {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for DrawResult {}
 
 /// Open the released reveals of attempt `t*` (Spec §9.3). `reveals` = `(uploader pid, C_{j,t*})`.
 /// Requires exactly one valid reveal (else `Err(RevealCount)`).
@@ -254,14 +312,15 @@ pub fn open_result(
     let dh = x25519_checked(&s.gp[i], &rp_e)?;
     let sk_r =
         <Kem as KemTrait>::PrivateKey::from_bytes(&s.gp[i]).map_err(|_| Error::InvalidKey)?;
-    let info = hpke_info(&ctx.g_r, t_star);
+    let rho = &outcome.rho;
+    let info = hpke_info(&ctx.g_r, rho, t_star);
 
     let mut found: Option<DrawResult> = None;
     let mut valid = 0usize;
     // Try every reveal (no early exit, uniform access pattern).
     for (pid_j, c) in reveals {
         let Some(res) = try_open(
-            &ctx.g_r, t_star, &dh, &rp_e, &gp_pub, &sk_r, &info, roster, pid_j, c,
+            &ctx.g_r, rho, t_star, &dh, &rp_e, &gp_pub, &sk_r, &info, roster, pid_j, c,
         ) else {
             continue;
         };
@@ -278,6 +337,7 @@ pub fn open_result(
 #[allow(clippy::too_many_arguments)]
 fn try_open(
     g_r: &[u8; 32],
+    rho: &[u8; 32],
     t: u8,
     dh: &[u8; 32],
     rp_e: &[u8; 32],
@@ -312,7 +372,7 @@ fn try_open(
     if len > NOTE_MAX || pt[OFF_NOTE + len..].iter().any(|&b| b != 0) {
         return None;
     }
-    let mac = claim_mac(g_r, t, dh, pid_j, rp_e, gp_pub);
+    let mac = claim_mac(g_r, rho, t, dh, pid_j, rp_e, gp_pub);
     if !ct_eq(&mac, &pt[OFF_MAC..OFF_LEN]) {
         return None;
     }
@@ -326,6 +386,269 @@ fn try_open(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dcnet::{build_roles_vector, evaluate_roles, own_positions, xor_into};
+    use crate::roles_vector_len;
+    use crate::roster::{RosterEntry, group_context};
+
+    /// A finished 4-person round (step 1 and step 2 uploads), searched deterministically.
+    struct Fixture {
+        gid: GroupId,
+        round: u32,
+        keys: Vec<ParticipantKeys>,
+        roster: Roster,
+        outcome: RolesOutcome,
+        own: Vec<OwnPositions>,
+        uploads: Vec<Vec<u8>>,
+        t_star: u8,
+    }
+
+    const NOTE: &str = "Paket bitte an die Packstation";
+
+    fn fixture() -> Fixture {
+        let gid = GroupId([0x42; 16]);
+        let keys: Vec<_> = (0..4)
+            .map(|i| ParticipantKeys::derive(&[i as u8 + 0x10; 32], &gid).unwrap())
+            .collect();
+        let roster = Roster::new(
+            keys.iter()
+                .map(|k| {
+                    let p = k.public();
+                    RosterEntry::new(p.pid, p.ipk, p.idh, b"n")
+                })
+                .collect(),
+        )
+        .unwrap();
+        for round in 1..50 {
+            let mut r = vec![0u8; roles_vector_len(4)];
+            for k in &keys {
+                xor_into(
+                    &mut r,
+                    &build_roles_vector(k, &gid, round, &roster).unwrap(),
+                )
+                .unwrap();
+            }
+            let g = group_context(&gid, round, &roster);
+            let Ok(outcome) = evaluate_roles(&g, 4, &r) else {
+                continue;
+            };
+            let own: Vec<_> = keys
+                .iter()
+                .map(|k| own_positions(k, &gid, round, &roster, &r, &outcome).unwrap())
+                .collect();
+            let uploads: Vec<_> = keys
+                .iter()
+                .zip(&own)
+                .map(|(k, o)| {
+                    build_reveal_upload(k, &gid, round, &roster, &outcome, o, NOTE).unwrap()
+                })
+                .collect();
+            let mut sd = vec![0u8; L_SD];
+            for u in &uploads {
+                xor_into(&mut sd, split_reveal_upload(u).unwrap().0).unwrap();
+            }
+            let Some(t_star) = select_attempt(&outcome, &sd) else {
+                continue;
+            };
+            return Fixture {
+                gid,
+                round,
+                keys,
+                roster,
+                outcome,
+                own,
+                uploads,
+                t_star,
+            };
+        }
+        panic!("no successful round");
+    }
+
+    impl Fixture {
+        fn released(&self) -> Vec<(Pid, Vec<u8>)> {
+            self.keys
+                .iter()
+                .zip(&self.uploads)
+                .map(|(k, u)| {
+                    let (_, cs) = split_reveal_upload(u).unwrap();
+                    (k.public().pid, cs[usize::from(self.t_star - 1)].to_vec())
+                })
+                .collect()
+        }
+
+        fn open(&self, i: usize, t: u8, reveals: &[(Pid, Vec<u8>)]) -> Result<DrawResult> {
+            open_result(
+                &self.keys[i],
+                &self.gid,
+                self.round,
+                &self.roster,
+                &self.outcome,
+                &self.own[i],
+                t,
+                reveals,
+            )
+        }
+
+        /// Index of the participant that giver `i` gives to in attempt `t*`.
+        fn recipient_of(&self, i: usize) -> usize {
+            let ti = usize::from(self.t_star - 1);
+            let s = sigma(&self.outcome.rho, self.t_star, 4);
+            let e = usize::from(s[self.own[i].p[ti].unwrap()]);
+            self.own.iter().position(|o| o.e == e).unwrap()
+        }
+
+        /// Reveal of sender `j` for `t*`, built like the real one but with the plaintext
+        /// modified by `tamper` before sealing.
+        fn craft(&self, j: usize, tamper: fn(&mut [u8; L_PT])) -> Vec<u8> {
+            let ctx = round_ctx(&self.keys[j], &self.gid, self.round, &self.roster).unwrap();
+            let s = &ctx.secrets;
+            let t = self.t_star;
+            let ti = usize::from(t - 1);
+            let rho = &self.outcome.rho;
+            let sig = sigma(rho, t, 4);
+            let pk_r =
+                self.outcome.givers[ti].as_ref().unwrap()[usize::from(invert(&sig)[self.own[j].e])];
+            let pid = self.keys[j].public().pid;
+            let dh = x25519_checked(&s.rp, &pk_r).unwrap();
+            let mac = claim_mac(&ctx.g_r, rho, t, &dh, &pid, &s.rp_pub, &pk_r);
+            let mut pt = plaintext(PT_VERSION, &pid, &mac, NOTE.as_bytes());
+            tamper(&mut pt);
+            let sk_s =
+                <Kem as KemTrait>::PrivateKey::from_bytes(self.keys[j].idh_secret()).unwrap();
+            seal_reveal(&sk_s, &s.rng_key, &ctx.g_r, rho, t, &pk_r, &pt)
+                .unwrap()
+                .to_vec()
+        }
+    }
+
+    #[test]
+    fn honest_round_and_crafted_reveal_match() {
+        let f = fixture();
+        let released = f.released();
+        for i in 0..4 {
+            let res = f.open(i, f.t_star, &released).unwrap();
+            let j = f.recipient_of(i);
+            assert_ne!(i, j);
+            assert_eq!(res.recipient, f.keys[j].public().pid);
+            assert_eq!(res.note, NOTE);
+            // The test helper reproduces the real reveal byte for byte.
+            assert_eq!(f.craft(j, |_| {}), released[j].1);
+        }
+    }
+
+    #[test]
+    fn tampered_plaintexts_are_rejected() {
+        let f = fixture();
+        let giver = 0;
+        let j = f.recipient_of(giver);
+        let tampers: [fn(&mut [u8; L_PT]); 6] = [
+            |pt| pt[OFF_MAC] ^= 1,                                             // wrong MAC
+            |pt| pt[OFF_PID] ^= 1,                                             // wrong pid
+            |pt| pt[0] = 2,                                                    // wrong version
+            |pt| pt[L_PT - 1] = 1,                                             // non-zero filler
+            |pt| pt[OFF_LEN..OFF_NOTE].copy_from_slice(&462u16.to_be_bytes()), // too long
+            |pt| pt[OFF_NOTE] = 0xff,                                          // invalid UTF-8
+        ];
+        for (k, tamper) in tampers.into_iter().enumerate() {
+            let mut released = f.released();
+            released[j].1 = f.craft(j, tamper);
+            assert_eq!(
+                f.open(giver, f.t_star, &released).err(),
+                Some(Error::RevealCount),
+                "tamper {k}"
+            );
+        }
+        // A correctly sealed reveal under a pid other than the sender's is rejected, too.
+        let mut released = f.released();
+        let other = (0..4).find(|&x| x != j && x != giver).unwrap();
+        released[j].0 = f.keys[other].public().pid;
+        released[other].0 = f.keys[j].public().pid;
+        assert_eq!(
+            f.open(giver, f.t_star, &released).err(),
+            Some(Error::RevealCount)
+        );
+        // Wrong length / unknown pid are skipped without panic.
+        let mut released = f.released();
+        released[j].1.pop();
+        released.push((Pid([9; 16]), vec![0u8; L_CT]));
+        assert_eq!(
+            f.open(giver, f.t_star, &released).err(),
+            Some(Error::RevealCount)
+        );
+    }
+
+    #[test]
+    fn two_valid_reveals_are_rejected() {
+        let f = fixture();
+        let giver = 1;
+        let j = f.recipient_of(giver);
+        let mut released = f.released();
+        released.push(released[j].clone());
+        assert_eq!(
+            f.open(giver, f.t_star, &released).err(),
+            Some(Error::RevealCount)
+        );
+    }
+
+    #[test]
+    fn open_result_rejects_wrong_attempt() {
+        let f = fixture();
+        let released = f.released();
+        for t in [0u8, 17, 255] {
+            assert_eq!(f.open(0, t, &released).err(), Some(Error::AttemptMismatch));
+        }
+        for t in 1..=16u8 {
+            let ti = usize::from(t - 1);
+            let self_draw = f.outcome.givers[ti].is_some()
+                && usize::from(sigma(&f.outcome.rho, t, 4)[f.own[0].p[ti].unwrap()]) == f.own[0].e;
+            if f.outcome.givers[ti].is_none() || self_draw {
+                assert_eq!(
+                    f.open(0, t, &released).err(),
+                    Some(Error::AttemptMismatch),
+                    "t = {t}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn step2_is_deterministic_and_note_dependent() {
+        let f = fixture();
+        let build = |note: &str| {
+            build_reveal_upload(
+                &f.keys[2], &f.gid, f.round, &f.roster, &f.outcome, &f.own[2], note,
+            )
+            .unwrap()
+        };
+        assert_eq!(build(NOTE), f.uploads[2]);
+        let other = build("andere Notiz");
+        let (sd_a, ca) = split_reveal_upload(&f.uploads[2]).unwrap();
+        let (sd_b, cb) = split_reveal_upload(&other).unwrap();
+        assert_eq!(sd_a, sd_b);
+        for ti in 0..T_ATTEMPTS {
+            if f.outcome.givers[ti].is_some() {
+                // Different plaintext ⇒ different ephemeral (no AEAD nonce reuse).
+                assert_ne!(ca[ti][..L_ENC], cb[ti][..L_ENC], "attempt {}", ti + 1);
+            } else {
+                assert_eq!(ca[ti], cb[ti]);
+            }
+        }
+        let too_long = "x".repeat(NOTE_MAX + 1);
+        assert_eq!(
+            build_reveal_upload(
+                &f.keys[2], &f.gid, f.round, &f.roster, &f.outcome, &f.own[2], &too_long,
+            )
+            .err(),
+            Some(Error::InvalidLength)
+        );
+    }
+
+    #[test]
+    fn redacted_debug() {
+        let f = fixture();
+        assert_eq!(format!("{:?}", f.own[0]), "OwnPositions { <redacted> }");
+        let r = f.open(0, f.t_star, &f.released()).unwrap();
+        assert_eq!(format!("{r:?}"), "DrawResult { <redacted> }");
+    }
 
     fn outcome(valid: &[bool]) -> RolesOutcome {
         RolesOutcome {

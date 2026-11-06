@@ -13,9 +13,10 @@ use crate::{Error, GroupId, Pid, Result};
 const LOW_ORDER_TEST_KEY: [u8; 32] = [0x5a; 32];
 
 /// Fresh 32-byte secret from the platform CSPRNG (used for `GK`, `AS`, `seed`).
-pub fn generate_secret() -> Result<[u8; 32]> {
-    let mut out = [0u8; 32];
-    getrandom::fill(&mut out).map_err(|_| Error::Rng)?;
+/// Wiped when dropped; deref to `[u8; 32]` with `*secret`.
+pub fn generate_secret() -> Result<Zeroizing<[u8; 32]>> {
+    let mut out = Zeroizing::new([0u8; 32]);
+    getrandom::fill(out.as_mut()).map_err(|_| Error::Rng)?;
     Ok(out)
 }
 
@@ -40,6 +41,28 @@ pub fn pid_from_ipk(gid: &GroupId, ipk: &[u8; 32]) -> Pid {
 /// `true` iff `X25519(test, pk)` is non-zero, i.e. `pk` is not a point of small order.
 pub(crate) fn is_contributory(pk: &[u8; 32]) -> bool {
     x25519_checked(&LOW_ORDER_TEST_KEY, pk).is_ok()
+}
+
+/// `true` iff `u` is the canonical encoding of a field element: bit 255 clear and
+/// `u < p = 2^255 − 19` (little endian, RFC 7748).
+fn is_canonical_u(u: &[u8; 32]) -> bool {
+    if u[31] & 0x80 != 0 {
+        return false;
+    }
+    // u ≥ p ⇔ u[31] = 0x7f, u[1..31] all 0xff and u[0] ≥ 0xed.
+    let top_all_ones = u[31] == 0x7f && u[1..31].iter().all(|&b| b == 0xff);
+    !(top_all_ones && u[0] >= 0xed)
+}
+
+/// Validate a public X25519 identity key `IDH` (Spec §5): canonical encoding (bit 255 clear,
+/// `u < p`) and not of small order (non-contributory). Returns `Err(InvalidKey)` otherwise.
+/// Uniqueness within a group is checked by [`crate::roster::Roster::new`] and the server.
+pub fn validate_idh(idh: &[u8; 32]) -> Result<()> {
+    if is_canonical_u(idh) && is_contributory(idh) {
+        Ok(())
+    } else {
+        Err(Error::InvalidKey)
+    }
 }
 
 /// Public identity of a participant as stored on the server.
@@ -78,7 +101,7 @@ impl ParticipantKeys {
         let mut idh = Zeroizing::new([0u8; 32]);
         hkdf_expand(&prk, &[b"wichtel/v1/id-dh", &gid.0], idh.as_mut());
         let idh_pub = x25519_base(&idh);
-        if !is_contributory(&idh_pub) {
+        if validate_idh(&idh_pub).is_err() {
             // Cannot happen for a clamped scalar; checked anyway (Spec §11).
             return Err(Error::InvalidKey);
         }
@@ -107,9 +130,9 @@ impl ParticipantKeys {
         self.public
     }
 
-    /// Bearer token `tok`.
-    pub fn auth_token(&self) -> [u8; 32] {
-        *self.tok
+    /// Bearer token `tok` (wiped when the returned value is dropped).
+    pub fn auth_token(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(*self.tok)
     }
 
     /// `join_sig` over `H("wichtel/v1/join" ‖ gid ‖ IPK ‖ IDH ‖ auth_hash ‖ lp(enc_name) ‖ lp(enc_wish))`.
@@ -208,8 +231,9 @@ fn verifying_key(ipk: &[u8; 32]) -> Result<VerifyingKey> {
     Ok(vk)
 }
 
-/// Server side: verify a join request (signature, low-order check of `IDH`, `pid` derivation).
-/// Returns the derived `pid`.
+/// Server side: verify a join request (signature, [`validate_idh`] for `IDH`, `pid` derivation).
+/// Returns the derived `pid`. The server must additionally reject an `IDH` (or `pid`) that is
+/// already present in the group (Spec §5).
 pub fn verify_join(
     gid: &GroupId,
     ipk: &[u8; 32],
@@ -220,9 +244,7 @@ pub fn verify_join(
     join_sig: &[u8; 64],
 ) -> Result<Pid> {
     let vk = verifying_key(ipk)?;
-    if !is_contributory(idh) {
-        return Err(Error::InvalidKey);
-    }
+    validate_idh(idh)?;
     let msg = join_message(gid, ipk, idh, auth_hash, enc_name, enc_wish);
     vk.verify_strict(&msg, &Signature::from_bytes(join_sig))
         .map_err(|_| Error::BadSignature)?;
@@ -261,11 +283,46 @@ mod tests {
         let a = ParticipantKeys::derive(&[9u8; 32], &GID).unwrap();
         let b = ParticipantKeys::derive(&[9u8; 32], &GID).unwrap();
         assert_eq!(a.public(), b.public());
-        assert_eq!(a.auth_token(), b.auth_token());
+        assert_eq!(*a.auth_token(), *b.auth_token());
         let c = ParticipantKeys::derive(&[9u8; 32], &GroupId([2u8; 16])).unwrap();
         assert_ne!(a.public().ipk, c.public().ipk);
         assert_ne!(a.public().idh, c.public().idh);
         assert_eq!(a.public().pid, pid_from_ipk(&GID, &a.public().ipk));
+    }
+
+    #[test]
+    fn idh_validation() {
+        let good = ParticipantKeys::derive(&[1u8; 32], &GID)
+            .unwrap()
+            .public()
+            .idh;
+        assert_eq!(validate_idh(&good), Ok(()));
+        // Bit 255 set: same point mod p for X25519, but non-canonical encoding.
+        let mut high = good;
+        high[31] |= 0x80;
+        assert_eq!(validate_idh(&high), Err(Error::InvalidKey));
+        // u = p (≡ 0) and u = p + 1 (≡ 1, low order) and u = p + 9 (≡ 9, non-canonical).
+        let mut p = [0xffu8; 32];
+        p[0] = 0xed;
+        p[31] = 0x7f;
+        assert_eq!(validate_idh(&p), Err(Error::InvalidKey));
+        let mut p9 = p;
+        p9[0] = 0xed + 9;
+        assert_eq!(validate_idh(&p9), Err(Error::InvalidKey));
+        // p − 1 is canonical (but of small order: it is −1, a 2-torsion point).
+        let mut pm1 = p;
+        pm1[0] = 0xec;
+        assert!(is_canonical_u(&pm1));
+        assert_eq!(validate_idh(&pm1), Err(Error::InvalidKey));
+        // Small-order points.
+        assert_eq!(validate_idh(&[0u8; 32]), Err(Error::InvalidKey));
+        let mut one = [0u8; 32];
+        one[0] = 1;
+        assert_eq!(validate_idh(&one), Err(Error::InvalidKey));
+        // Base point 9 is fine.
+        let mut nine = [0u8; 32];
+        nine[0] = 9;
+        assert_eq!(validate_idh(&nine), Ok(()));
     }
 
     #[test]
