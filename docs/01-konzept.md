@@ -1,6 +1,6 @@
 # Weihnachtswichtel – Konzept
 
-Stand: 2026-11-06 · Status: Entwurf v1
+Stand: 2026-11-06 · Status: Entwurf v2 (überarbeitet nach Review, siehe `02-review.md`)
 
 ## 1. Ziel
 
@@ -34,13 +34,14 @@ kryptographisches Protokoll (Multi-Party-Computation im Kleinen). Der Server ist
 
 | Akteur | Annahme | Schutzziel |
 |---|---|---|
-| Spielleiter | neugierig, evtl. mit DB-Zugriff (z. B. selbst gehostet) | erfährt keine Zuordnung (außer seiner eigenen) |
+| Spielleiter | neugierig, evtl. mit DB-Lesezugriff, aber **nicht** Betreiber des Servers | erfährt keine Zuordnung (außer seiner eigenen) |
 | Server/Betreiber | *honest-but-curious*: liefert korrekten Code aus, liest aber DB, Logs, Traffic | erfährt keine Zuordnung, keine Klarnamen |
-| Teilnehmer | neugierig, einzelne evtl. böswillig (stören) | erfährt nur den eigenen Beschenkten; Störungen werden **erkannt** (nicht zwingend zugeordnet) |
+| Teilnehmer | neugierig, einzelne evtl. böswillig (stören, neu würfeln wollen) | erfährt nur den eigenen Beschenkten; Störungen werden erkannt **und dem Störer zugeordnet**; niemand kann gezielt neu würfeln lassen |
 | Außenstehende | kennen den Link nicht | sehen nichts |
 
 **Explizit nicht abgedeckt** (siehe Review): ein *aktiv bösartiger* Server, der manipuliertes
 JavaScript/WASM ausliefert. Das ist eine grundsätzliche Grenze jeder Browser-E2E-Anwendung.
+Daraus folgt: Hostet der Spielleiter den Server selbst, schützt das Protokoll **nicht** vor ihm.
 
 ## 4. Nutzerfluss
 
@@ -53,15 +54,17 @@ JavaScript/WASM ausliefert. Das ist eine grundsätzliche Grenze jeder Browser-E2
    **persönlichen Link** `…#k=<GK>&s=<seed>` an („als Lesezeichen speichern – damit siehst du später dein Ergebnis, auch auf einem anderen Gerät“).
 3. **Teilnehmerliste prüfen**: Alle sehen die Liste der Namen. Der Spielleiter kann Einträge
    entfernen (Dubletten, Spaßvögel).
-4. **Verlosung starten** (Spielleiter): Teilnehmerliste wird eingefroren. Ab jetzt läuft das
+4. **Fingerabdruck vergleichen**: Jeder sieht einen Gruppen-Fingerabdruck (6 Wörter) und postet
+   bzw. vergleicht ihn im Gruppenchat. Stimmt er bei allen überein, sehen alle dieselbe Liste.
+5. **Verlosung starten** (Spielleiter): Teilnehmerliste wird eingefroren. Ab jetzt läuft das
    Protokoll in Runden (Abschnitt 6). Zwei Modi:
    - **Live-Modus**: Alle haben den Link gleichzeitig offen (Weihnachtsfeier, Videocall). Das
      Protokoll läuft automatisch in wenigen Sekunden durch.
    - **Asynchron-Modus**: Jeder öffnet seinen persönlichen Link irgendwann; jeder Besuch erledigt
      automatisch den nächsten fälligen Schritt. Fortschritt ist für alle sichtbar
      („12 von 15 haben Schritt 2 erledigt“).
-5. **Ergebnis**: Jeder sieht „Du beschenkst: **Anna**“ (+ deren optionalen Hinweis).
-6. **Automatisches Löschen**: Alle Daten der Runde werden X Tage nach dem Wichteldatum gelöscht
+6. **Ergebnis**: Jeder sieht „Du beschenkst: **Anna**“ (+ deren optionalen Hinweis).
+7. **Automatisches Löschen**: Alle Daten der Runde werden X Tage nach dem Wichteldatum gelöscht
    (Default 14, max. 60). Der Spielleiter kann jederzeit sofort löschen.
 
 Warum der Gruppenschlüssel im **URL-Fragment** (`#…`)? Das Fragment wird vom Browser nie an den
@@ -69,104 +72,132 @@ Server geschickt. Damit kann der Server Namen, Titel und Wunschzettel nur als Ch
 
 ## 5. Schlüssel und Identitäten
 
-Alle Schlüssel werden im Browser erzeugt (CSPRNG via WebCrypto `getRandomValues`).
+Alle Schlüssel werden im Browser erzeugt (CSPRNG via WebCrypto `getRandomValues`). Alles
+Rundenspezifische wird **deterministisch aus dem `seed` abgeleitet**, damit der persönliche Link
+auf jedem Gerät und in jeder Phase genügt.
 
 | Schlüssel | Herkunft | Zweck |
 |---|---|---|
-| `GK` (32 B) | Spielleiter, im Link-Fragment | AEAD-Verschlüsselung von Gruppen-Metadaten, Namen, Wunschzetteln |
+| `GK` (32 B) | Spielleiter, im Link-Fragment | AEAD für Gruppen-Metadaten, Namen, Wunschzettel |
 | `AS` (32 B) | Spielleiter | Admin-Token; Server speichert nur `SHA-256(AS)` |
-| `seed` (32 B) | Teilnehmer | via HKDF abgeleitet: Ed25519-Identität (`isk`/`IPK`), X25519-Identität (`idh`/`IDH`), Auth-Token (Server speichert nur Hash) |
-| Pseudonym (pro Protokollrunde) | Teilnehmer, frisch zufällig | Ed25519 (`psk`/`PPK`) + X25519 (`pdh`/`PDH`); anonym, nicht mit Identität verknüpfbar |
+| `seed` (32 B) | Teilnehmer | Wurzel aller persönlichen Schlüssel (HKDF mit getrennten Labels) |
+| `isk`/`IPK` | `HKDF(seed, "id-sig")` | Ed25519: signiert Beitritt und Uploads gegenüber dem Server |
+| `idh`/`IDH` | `HKDF(seed, "id-dh")` | X25519: Identität gegenüber dem Schenker (HPKE-Auth) |
+| `tok` | `HKDF(seed, "auth")` | Bearer-Token; Server speichert nur `SHA-256(tok)` |
+| `e_r`/`E_r` | `HKDF(seed, "dc-eph" ‖ gid ‖ r)` | X25519 je Protokollrunde r: DC-Netz-Paarschlüssel; wird im Störfall **offengelegt** |
+| `x_r` | `HKDF(seed, "slot" ‖ gid ‖ r)` | Slot-Wahl je Runde; beim Beitritt nur als Commitment `H(x_r)` hinterlegt |
+| `pdh_r`/`PDH_r` | `HKDF(seed, "pseudo" ‖ gid ‖ r)` | X25519-Pseudonym je Runde |
 
-Gruppenkontext für alle Signaturen/KDFs:
-`G = SHA-256("wichtel-v1" ‖ gid ‖ round ‖ sortierte Liste (pid, IPK, IDH))`
-– damit sind alle Nachrichten an genau diese Teilnehmerliste und Runde gebunden. Zeigt der Server
-verschiedenen Teilnehmern verschiedene Listen, bricht das Protokoll ab (statt still zu leaken).
-Zusätzlich zeigt die UI einen kurzen **Gruppen-Fingerabdruck** (z. B. 4 Emojis aus `G`), den man
-im Live-Modus vergleichen kann.
+Beim **Beitritt** lädt der Client hoch: `IPK`, `IDH`, `H(tok)`, `enc_name`, `enc_wish` sowie für
+die Runden `r = 1…R_max` (z. B. 8) die Paare `(E_r, H(x_r))` – alles mit `isk` signiert.
+`enc_name`/`enc_wish` werden mit AAD `gid ‖ pid ‖ IPK ‖ IDH` verschlüsselt, damit niemand Namen
+zwischen Teilnehmern vertauschen kann. Alle Public Keys werden auf kleine Ordnung geprüft.
+
+Gruppenkontext für alle Signaturen/KDFs einer Runde:
+`G_r = SHA-256("wichtel-v2" ‖ gid ‖ r ‖ sortierte Liste (pid, IPK, IDH, E_r, H(x_r), H(enc_name)))`.
+Zeigt der Server verschiedenen Teilnehmern verschiedene Listen, passen die Masken nicht zusammen
+und das Protokoll bricht ab. Zusätzlich zeigt die UI einen **Gruppen-Fingerabdruck** aus `G_r`
+(≥ 64 Bit, z. B. 6 Wörter). Er muss vor dem Start **im Gruppenchat verglichen** werden – auch im
+Asynchron-Modus (Schutz gegen „jeder sieht eine eigene Welt aus Fake-Teilnehmern“).
 
 ## 6. Das Verlosungsprotokoll
 
 Idee in einem Satz: *Jeder veröffentlicht **anonym** ein Pseudonym; die zufällige Reihenfolge der
-Pseudonyme bildet einen Kreis (jeder beschenkt den nächsten); danach verrät jeder **nur seinem
-Schenker** – ohne zu wissen, wer das ist – wer hinter dem nächsten Pseudonym steckt.*
+Pseudonyme bildet einen Kreis (jeder beschenkt den nächsten); danach verrät sich jeder **nur seinem
+Schenker** – ohne zu wissen, wer das ist.*
 
 ### 6.1 Schritt 1 – Anonyme Pseudonyme (DC-Netz)
 
 Anonymes Veröffentlichen ohne vertrauenswürdige Partei gelingt mit einem **DC-Netz**
 („Dining Cryptographers“), das alle Teilnehmer **parallel** in **einem** Durchgang ausführen:
 
-- Jedes Paar `(i, j)` hat einen gemeinsamen Schlüssel `k_ij = HKDF(X25519(idh_i, IDH_j), "dcnet" ‖ G)`
-  – ohne Interaktion berechenbar, da alle öffentlichen Schlüssel beim Beitritt hinterlegt wurden.
-- Es gibt `m = max(64, 16·n²)` Slots à 72 Byte.
-  Slot-Inhalt: `PPK (32) ‖ PDH (32) ‖ SHA-256(G ‖ PPK ‖ PDH)[0..8]`.
-- Teilnehmer `i` wählt zufällig einen Slot `s_i` und berechnet den Vektor
-  `V_i = ⊕_{j≠i} ChaCha20(k_ij)[0 .. 72·m]  ⊕  (Pseudonym an Position s_i)`.
+- Jedes Paar `(i, j)` hat einen gemeinsamen Schlüssel
+  `k_ij = HKDF(X25519(e_r,i, E_r,j), "dcnet" ‖ G_r ‖ min(E_i,E_j) ‖ max(E_i,E_j))`
+  – ohne Interaktion berechenbar, da alle `E_r` beim Beitritt hinterlegt wurden.
+- Es gibt `m = max(64, 16·n²)` Slots à **40 Byte**: `PDH_r (32) ‖ SHA-256(G_r ‖ PDH_r)[0..8]`.
+- Der Slot `s_i` wird aus `x_r` per Rejection-Sampling (ohne Modulo-Bias) bestimmt. Weil `H(x_r)`
+  schon beim Beitritt festgelegt wurde, kann niemand seinen Slot nachträglich wählen – auch nicht,
+  wer mit DB-Zugriff die Vektoren der anderen vorab sieht (*Rushing*).
+- `V_i = ⊕_{j≠i} ChaCha20(k_ij)[0 .. 40·m]  ⊕  (Pseudonym an Position s_i)`.
 - Der Server sammelt alle `n` Vektoren und veröffentlicht erst dann `R = ⊕_i V_i`.
   Die paarweisen Masken heben sich auf; in `R` stehen alle Pseudonyme – **ohne Absender**.
-- Jeder Client prüft: genau `n` Slots mit gültiger Prüfsumme **und** das eigene Pseudonym steht an
-  der eigenen Stelle. Sonst (Kollision zweier Slots, ~3 % Wahrscheinlichkeit, oder Störung):
-  automatisch neue Protokollrunde `round+1`.
+- Jeder Client prüft: genau `n` gültige Slots **und** das eigene Pseudonym an der eigenen Stelle.
 
-Der Server sieht nur zufällig aussehende Vektoren gleicher Länge. Um einen Absender zu
-de-anonymisieren, bräuchte man **alle** paarweisen Schlüssel dieses Teilnehmers, also die
-Mitwirkung aller anderen.
+**Störfall im DC-Netz (Blame-Verfahren):** Ist die Prüfung nicht erfüllt (Kollision, ~3 %, oder
+Störer), legen **alle** `e_r` und `x_r` dieser Runde offen. Damit kann jeder jeden Vektor `V_i`
+nachrechnen: Entweder es war eine ehrliche Kollision (zwei korrekte Vektoren, gleicher Slot) ⇒
+Runde `r+1`; oder ein Teilnehmer hat einen falschen Vektor geschickt ⇒ er ist **namentlich
+überführt** und der Spielleiter entfernt ihn. Die offengelegten Werte sind rundenspezifisch; die
+verworfene Runde verrät nichts über künftige Runden.
 
 ### 6.2 Der Kreis
 
 Die gültigen Slots, aufsteigend sortiert, ergeben Positionen `0 … n-1`.
-**Position `k` beschenkt Position `(k+1) mod n`.** Da die Slots zufällig gewählt wurden, ist das ein
-gleichverteilt zufälliger Kreis über alle Teilnehmer – damit ist Selbstbeschenkung ausgeschlossen
-und es entstehen auch keine 2er-Pärchen („A beschenkt B, B beschenkt A“).
+**Position `k` beschenkt Position `(k+1) mod n`.** Das ergibt einen gleichverteilt zufälligen Kreis
+über alle Teilnehmer: keine Selbstbeschenkung, keine 2er-Pärchen.
 
-Jeder kennt nun seine eigene Position, aber nur Pseudonyme der anderen.
+Jeder kennt nun seine eigene Position; die Reihenfolge der Pseudonyme ist für alle sichtbar.
 
 ### 6.3 Schritt 2 – Enthüllung an den (unbekannten) Schenker
 
-Teilnehmer `i` auf Position `k` kennt das Pseudonym seines Schenkers (`k-1`), aber nicht dessen
-Identität. Damit der Server aus dem Upload-Muster nichts lernt, schickt **jeder an jede Position**
-genau eine Nachricht gleicher Länge:
+Teilnehmer `i` auf Position `k` lädt **genau einen** Chiffretext hoch, verschlüsselt an das Pseudonym
+seines Schenkers `PDH_{k-1}`:
 
-- an Position `k-1` (eigener Schenker): **echte Nachricht**
-  `0x01 ‖ pid_i ‖ Sig_isk_i(G ‖ "claim" ‖ k ‖ PPK_k) ‖ Sig_psk_k(G ‖ "claim" ‖ pid_i) ‖ optionale private Notiz`
-- an alle anderen Positionen: **Attrappe** `0x00 ‖ Padding`
-- alle Klartexte werden auf feste Länge `L = 1024 B` aufgefüllt und per **HPKE** (RFC 9180,
-  X25519-HKDF-SHA256 / ChaCha20-Poly1305) an `PDH_p` verschlüsselt; Info = `G ‖ "reveal" ‖ p`.
+- **HPKE** (RFC 9180) im **Auth-Modus**, X25519-HKDF-SHA256 / ChaCha20-Poly1305, Absenderschlüssel
+  `idh_i` ⇒ der Schenker weiß sicher: „das kommt von Identität `pid_i`“.
+- Klartext: `pid_i ‖ MAC_{X25519(pdh_k, PDH_{k-1})}(G_r ‖ "claim" ‖ pid_i) ‖ optionale private Notiz`,
+  aufgefüllt auf feste Länge `L = 512 B`. Der MAC beweist: „Identität `pid_i` besitzt das
+  Pseudonym auf Position `k`“.
+- `info = G_r ‖ "reveal"`.
 
-Der Server veröffentlicht die `n²` Chiffretexte erst, wenn alle hochgeladen haben. **Jeder Client
-lädt alle herunter** (kein positionsabhängiges Zugriffsmuster!) und entschlüsselt lokal die `n`, die
-an seine Position adressiert sind. Erwartet wird **genau eine** echte Nachricht mit zwei gültigen
-Signaturen – die belegen: „Identität `pid_j` besitzt das Pseudonym auf Position `k+1`“.
+HPKE mit DHKEM ist **key-private**: Am Chiffretext ist nicht erkennbar, an welchen Schlüssel er
+gerichtet ist. Der Server sieht also n gleich große Uploads von n Personen – sonst nichts. Erst wenn
+alle hochgeladen haben, gibt er sie frei. **Jeder Client lädt alle n herunter** und probiert sie
+durch. Erwartet wird **genau einer**, der sich entschlüsseln lässt und dessen MAC stimmt.
 
 Ergebnis: „Du beschenkst `name(pid_j)`“ (Name entschlüsselt mit `GK`) + optionale private Notiz
-(z. B. Lieferadresse, die so nur der Schenker sieht).
+(z. B. Lieferadresse, die so nur der Schenker sieht). Weil MAC statt Signatur verwendet wird, kann
+der Schenker das Ergebnis **niemandem beweisen** (Abstreitbarkeit).
 
-Abweichungen (0 oder ≥ 2 echte Nachrichten, ungültige Signatur) ⇒ Client meldet „Störung“, die
-Runde wird neu gestartet.
+**Störfall in der Enthüllung:** Es gibt **keinen** automatischen Neustart mehr – sonst könnte jeder,
+der sein Ergebnis kennt, so lange „Störung“ melden, bis es ihm passt. Wer 0 oder ≥ 2 gültige
+Nachrichten erhält, kann eine **Beschwerde mit Beweis** einreichen: Er legt `pdh_r` seiner Position
+offen. Jeder kann dann alle n Chiffretexte daraufhin prüfen und sieht, welcher Uploader falsch
+gehandelt hat – oder dass die Beschwerde unbegründet war. Beides ist namentlich zuordenbar.
+Neustarts löst nur der Spielleiter aus, sichtbar für alle und mitgezählt („Runde 3“).
 
 ### 6.4 Rundenzahl & Besuche
 
 | Phase | Wer | Voraussetzung |
 |---|---|---|
-| Beitritt | jeder | – |
+| Beitritt (inkl. Commitments) | jeder | – |
 | DC-Netz-Upload | jeder | Spielleiter hat gestartet |
-| Enthüllungs-Upload | jeder | alle DC-Uploads da |
+| Enthüllungs-Upload | jeder | alle DC-Uploads da und gültig |
 | Ergebnis abrufen | jeder | alle Enthüllungen da |
+| *(nur im Störfall)* Offenlegung | jeder | Prüfung fehlgeschlagen |
 
-Im **Live-Modus** läuft das in Sekunden ab (Clients pollen bzw. lauschen per Server-Sent Events).
-Im **Asynchron-Modus** braucht jeder bis zu 4 Besuche; jeder Besuch erledigt automatisch alles
-Mögliche. Erscheint ein Teilnehmer nicht, kann der Spielleiter ihn entfernen ⇒ neue Runde mit den
-verbleibenden.
+Im **Live-Modus** läuft das in Sekunden ab (Server-Sent Events). Im **Asynchron-Modus** braucht
+jeder bis zu 4 Besuche; jeder Besuch erledigt automatisch alles Mögliche.
+
+**Abbrecher:** Fehlt ein Upload von `X`, kann der Spielleiter `X` entfernen. Statt neu zu starten,
+legen die übrigen ihre Paarmasken `k_iX` offen (nur die mit `X` – das gefährdet niemanden), und der
+Server rechnet `X` aus `R` heraus. Die Runde läuft mit n−1 weiter. Wer sich so selbst entfernt, um
+die Reihenfolge zu beeinflussen, ist danach nicht mehr dabei.
 
 ### 6.5 Was lernt wer?
 
-- **Server/Spielleiter**: Teilnehmerzahl, öffentliche Schlüssel, Zeitpunkte, Fortschritt.
-  Keine Namen im Klartext (nur mit `GK` – der Spielleiter kennt `GK`, also die Namen, aber nicht
-  die Zuordnung). Keine Zuordnung.
-- **Teilnehmer**: den eigenen Beschenkten. Dass der Schenker *nicht* der eigene Beschenkte ist
-  (Kreisstruktur, bei n ≥ 4 sonst nichts).
-- **Koalition aus k Teilnehmern + Server**: ihre eigenen Zuordnungen; die übrigen bleiben
-  anonym, solange mindestens 2 ehrliche Teilnehmer übrig sind.
+- **Server/Spielleiter** (passiv): Teilnehmerzahl, öffentliche Schlüssel, Zeitpunkte, Fortschritt.
+  Keine Zuordnung. Der Spielleiter kennt `GK` und damit die Namen – der Server allein nicht.
+- **Teilnehmer**: den eigenen Beschenkten; dass sein Schenker nicht sein Beschenkter ist.
+- **Koalitionen**: Die Reihenfolge der Pseudonyme ist öffentlich. Zwei Verbündete kennen deshalb
+  ihren Abstand im Kreis. Sitzt B zwei Plätze hinter A, wissen beide zusammen, wer B beschenkt
+  (A kennt seinen Beschenkten, und genau dieser beschenkt B). Bei zufälligem Kreis passiert das mit
+  Wahrscheinlichkeit ≈ 2/(n−1), bei n = 10 also ≈ 22 %. Allgemein lernt eine Koalition die Kanten
+  zwischen ihren Mitgliedern und deren direkten Nachbarn – nicht mehr. Erzwingen können sie eine
+  bestimmte Lage nicht (Slot-Commitments, keine freien Neustarts).
+- **n = 3**: Jeder kennt die komplette Zuordnung (gilt für *jedes* Verfahren). Deshalb **n ≥ 4**.
+- **Grenze**: Ein *aktiv* bösartiger Server kann manipulierten Code ausliefern (siehe Review A1).
+  Der Schutz vor dem Spielleiter gilt nur, wenn der Spielleiter **nicht** zugleich Betreiber ist.
 
 ## 7. Architektur & Technik
 
@@ -212,14 +243,16 @@ abbrechenden Teilnehmern.
 | `POST /api/groups` | – | Gruppe anlegen (`admin_hash`, `enc_meta`) |
 | `GET /api/groups/{gid}` | – | Zustand, `enc_meta`, Teilnehmerliste (pid, Public Keys, `enc_name`), Fortschritt |
 | `DELETE /api/groups/{gid}` | Admin | sofort löschen |
-| `POST /api/groups/{gid}/participants` | – | beitreten (`IPK`, `IDH`, `auth_hash`, `enc_name`, `enc_wish`) |
+| `POST /api/groups/{gid}/participants` | – | beitreten (`IPK`, `IDH`, `auth_hash`, `enc_name`, `enc_wish`, `(E_r, H(x_r))` für r = 1…R_max) |
 | `DELETE /api/groups/{gid}/participants/{pid}` | Admin oder selbst | entfernen / austreten (nur vor Start bzw. löst Neustart aus) |
 | `POST /api/groups/{gid}/start` | Admin | Liste einfrieren, Runde 1 starten |
 | `PUT /api/groups/{gid}/rounds/{r}/dcnet` | Teilnehmer | Vektor `V_i` (signiert) |
 | `GET /api/groups/{gid}/rounds/{r}/dcnet` | – | `R`, erst wenn vollständig |
-| `PUT /api/groups/{gid}/rounds/{r}/reveal` | Teilnehmer | `n` Chiffretexte (signiert) |
-| `GET /api/groups/{gid}/rounds/{r}/reveal` | – | alle `n²` Chiffretexte, erst wenn vollständig |
-| `POST /api/groups/{gid}/rounds/{r}/abort` | Teilnehmer | Störung melden ⇒ Runde `r+1` |
+| `PUT /api/groups/{gid}/rounds/{r}/blame` | Teilnehmer | Offenlegung `e_r`, `x_r` (nur im DC-Störfall) bzw. Maskenkorrektur `k_iX` (bei Abbrecher X) |
+| `PUT /api/groups/{gid}/rounds/{r}/reveal` | Teilnehmer | **ein** Chiffretext (signiert) |
+| `GET /api/groups/{gid}/rounds/{r}/reveal` | – | alle `n` Chiffretexte, erst wenn vollständig |
+| `POST /api/groups/{gid}/rounds/{r}/complaint` | Teilnehmer | Beschwerde mit Beweis (`pdh_r`); kein Freitext, keine Position |
+| `POST /api/groups/{gid}/rounds/{r}/restart` | Admin | Neustart (sichtbar, gezählt) |
 | `GET /api/groups/{gid}/events` | – | SSE: Zustandsänderungen (für Live-Modus) |
 
 Auth per `Authorization: Bearer <token>`; Server vergleicht Hashes in konstanter Zeit.
@@ -232,13 +265,19 @@ groups(gid TEXT PK, admin_hash BLOB, enc_meta BLOB, state TEXT, round INT,
        roster_hash BLOB, created_at INT, expires_at INT)
 participants(gid, pid, ipk BLOB, idh BLOB, auth_hash BLOB, enc_name BLOB,
              enc_wish BLOB, joined_at INT, PRIMARY KEY(gid, pid))
+round_commitments(gid, pid, round, eph_pub BLOB, slot_commit BLOB)
+blame_disclosures(gid, round, pid, payload BLOB)
 dcnet_uploads(gid, round, pid, vector BLOB)          -- wird nach Berechnung von R gelöscht
 dcnet_results(gid, round, result BLOB)
-reveal_uploads(gid, round, pid, ciphertexts BLOB)
+reveal_uploads(gid, round, pid, ciphertext BLOB)
+complaints(gid, round, pid, proof BLOB)
 ```
 
-Größen: n = 20 ⇒ `m = 6400` Slots ⇒ 460 KB pro DC-Vektor, Enthüllung 20 × 1,1 KB pro Teilnehmer.
-Obergrenze: **n ≤ 50** (DC-Vektor ≈ 2,9 MB).
+Größen: n = 20 ⇒ `m = 6400` Slots à 40 B ⇒ 256 KB pro DC-Vektor; Enthüllung 1 × ~0,6 KB pro
+Teilnehmer. Obergrenze **n ≤ 50** (DC-Vektor ≈ 1,6 MB, ~80 MB Keystream je Client – im Web Worker
+unter einer Sekunde); empfohlen ≤ 30.
+SQLite mit `PRAGMA secure_delete = ON` und regelmäßigem WAL-Checkpoint, damit gelöschte Vektoren
+nicht in Freelist/WAL weiterleben.
 
 ### 7.4 Datensparsamkeit
 

@@ -1,6 +1,6 @@
 # Weihnachtswichtel – Kritisches Review des Konzepts
 
-Stand: 2026-11-06 · Gegenstand: `01-konzept.md` (v1)
+Stand: 2026-11-06 · Gegenstand: `01-konzept.md` (v1; Ergebnis eingearbeitet in v2)
 
 Bewertung: 🔴 kritisch · 🟠 hoch · 🟡 mittel · 🟢 niedrig. Jede Feststellung hat eine Entscheidung,
 die in Spezifikation (`04-protokoll-spec.md`, Phase 0) und Plan übernommen wird.
@@ -43,23 +43,23 @@ Ein einzelner Kreis ist nur eine Teilmenge aller fixpunktfreien Permutationen. F
 2er-Pärchen (gewollt), aber bei **n = 3 kennt jeder die komplette Zuordnung** (A→B ⇒ B→C ⇒ C→A).
 Das gilt für n = 3 bei *jedem* Verfahren, da es nur zwei fixpunktfreie Permutationen gibt.
 
-*Entscheidung:* Minimum **n = 4**, bei n = 4 Hinweis anzeigen. Kreis beibehalten.
+*Entscheidung:* Minimum **n = 4**, bei n ≤ 5 Hinweis anzeigen. Kreis beibehalten. Zur
+Koalitions-Problematik der öffentlichen Reihenfolge siehe F4.
 
 ### B3 🟡 Kollisionen und Störer im DC-Netz
-~3 % Kollisionswahrscheinlichkeit pro Runde; ein böswilliger Teilnehmer kann jede Runde stören
-(Jamming) und ist nicht identifizierbar. Im Asynchron-Modus kostet jeder Neustart allen einen
-weiteren Besuch.
+~3 % Kollisionswahrscheinlichkeit pro Runde; in v1 konnte ein böswilliger Teilnehmer jede Runde
+unerkannt stören (Jamming). Im Asynchron-Modus kostet jeder Neustart allen einen weiteren Besuch.
 
-*Entscheidung:* Für Freundes-/Kollegenkreise akzeptabel. Kollisionen: `m` so wählen, dass
-P(Kollision) ≤ 3 %; Neustart läuft im Live-Modus automatisch. Nach 3 gestörten Runden zeigt die UI
-„Jemand stört die Verlosung“ und empfiehlt einen Live-Termin. Kein Identifizierungsmechanismus in v1.
+*Entscheidung (v2):* Blame-Verfahren mit rundenspezifischen, vorab committeten Schlüsseln (siehe
+F2) – Störer werden namentlich überführt. Ehrliche Kollisionen bleiben bei ~3 % und kosten einen
+zusätzlichen Besuch; im Live-Modus merkt man davon nichts.
 
 ### B4 🟡 Abbrecher blockieren alle
 Ein einziger Teilnehmer, der seinen Upload nicht macht, blockiert die Runde (das DC-Netz braucht
 alle Vektoren).
 
 *Entscheidung:* Fortschrittsanzeige („wartet auf: Max, Lisa“ – das ist unkritisch, sagt nichts über
-die Zuordnung). Spielleiter kann Wartende entfernen ⇒ neue Runde. Empfehlung in der UI: Verlosung
+die Zuordnung). Spielleiter kann Wartende entfernen ⇒ in v2 werden sie herausgerechnet statt neu zu starten (F8). Empfehlung in der UI: Verlosung
 erst starten, wenn alle „bereit“ markiert haben; Live-Modus bevorzugen.
 
 ### B5 🟡 Ausschlüsse (Paare) passen nicht ins Grundprotokoll
@@ -74,7 +74,8 @@ Konflikt“. Kostet einen weiteren Besuch.
 
 ### C1 🟠 Schlüsselverlust = Ergebnis verloren
 Wer `localStorage` löscht, im privaten Fenster war oder das Gerät wechselt, kann ohne persönlichen
-Link sein Ergebnis nie wieder sehen – und niemand kann es ihm sagen (gewollt!).
+Link sein Ergebnis nie wieder sehen – und niemand kann es ihm sagen (gewollt!). Mit dem Link geht
+es dagegen auf jedem Gerät, weil in v2 alle Rundenschlüssel aus dem `seed` abgeleitet werden (F7).
 
 *Entscheidung:* Persönlicher Link wird nach dem Beitritt **erzwungen** gesichert (Kopieren-Button,
 QR-Code, „Ich habe den Link gespeichert“-Checkbox). Geht er *vor* dem Start verloren: austreten und
@@ -131,3 +132,31 @@ Datenschutzerklärung und Impressum (bei öffentlichem Betrieb) einplanen.
 | Sequentieller Mixnet-Shuffle (jeder mischt nacheinander) | Gleiche Garantien, aber n Besuche *nacheinander* statt parallel – im Asynchron-Modus untauglich. |
 | Volles MPC-Framework | Viel zu schwergewichtig für den Browser und das Problem. |
 | Rust-Frontend-Framework (Leptos/Yew) | Möglich, aber deutlich höhere Build-Last und WASM-Größe; die UI ist schlicht genug für TS. Rust bleibt dort, wo es zählt: Krypto-Kern und Server. |
+
+## F. Unabhängiges Zweit-Review (Protokoll)
+
+Ein zweiter Reviewer hat das Konzept v1 ohne Kenntnis dieses Reviews geprüft. Seine Funde und die
+Entscheidungen dazu (alle in Konzept v2 umgesetzt, sofern nicht anders vermerkt):
+
+| # | Fund | Schwere | Entscheidung |
+|---|---|---|---|
+| F1 | **Neu würfeln nach Sicht aufs Ergebnis**: Der ungeprüfte `abort` erlaubte jedem, der seinen Beschenkten kennt, so lange neu losen zu lassen, bis es passt. | 🔴 | Kein automatischer Neustart nach der Enthüllung. Beschwerden nur **mit Beweis** (Offenlegung des Rundenpseudonyms ⇒ Störer oder falscher Beschwerdeführer wird sichtbar). Neustart nur durch Spielleiter, sichtbar und gezählt. |
+| F2 | **Störungen im DC-Netz nicht zuordenbar** ⇒ risikoloses Stören, gezieltes Neuwürfeln mit Komplizen. | 🟠 | Paarschlüssel aus rundenspezifischen Ephemeral-Keys, beim Beitritt hinterlegt. Im Störfall legen alle offen ⇒ jeder Vektor ist nachprüfbar. |
+| F3 | **Rushing**: Wer DB-Zugriff hat, sieht die Vektoren der anderen vor dem eigenen Upload und kann seinen Slot passend wählen. | 🟠 | Slot-Wahl aus beim Beitritt committetem `x_r` ⇒ keine freie Wahl mehr. Kostet keinen zusätzlichen Besuch (statt Commit-then-Reveal pro Runde). |
+| F4 | **Koalitionsaussage falsch**: Die Pseudonym-Reihenfolge ist öffentlich; zwei Verbündete im Abstand 2 erfahren, wer den zweiten beschenkt (≈ 2/(n−1), bei n = 10 ≈ 22 %). | 🟠 | Aussage in §6.5 korrigiert. Akzeptiertes Restrisiko: es braucht eine Absprache und betrifft nur Nachbarn der Verbündeten. Vollständig verbergen ginge nur mit einem sequentiellen Shuffle (n Besuche nacheinander) – nicht praktikabel. |
+| F5 | **Selbst hostender Spielleiter** widerspricht dem Bedrohungsmodell; außerdem Partitionsangriff (jeder sieht eigene Fake-Welt), im Asynchron-Modus unbemerkt. | 🔴 | Bedrohungsmodell präzisiert (Spielleiter ≠ Betreiber). Fingerabdruck ≥ 64 Bit, **Vergleich im Gruppenchat vor dem Start Pflicht** (UI-Schritt). Reproduzierbare Builds, Bundle-Hash veröffentlichen (vgl. A1). |
+| F6 | **Namen nicht an Schlüssel gebunden** ⇒ wer in die DB schreibt, kann Namen vertauschen. | 🟠 | AEAD mit AAD `gid‖pid‖IPK‖IDH`, `H(enc_name)` fließt in `G_r` ein. |
+| F7 | **Pseudonyme zufällig statt abgeleitet** ⇒ persönlicher Link reicht nicht, Gerätewechsel zwischen Phasen bricht alles. | 🟠 | Alle Rundenschlüssel per HKDF aus `seed`. |
+| F8 | **Asynchron-Modus**: ein Abwesender blockiert alle; jeder Neustart kostet Besuche. | 🟡 | Abbrecher werden herausgerechnet (übrige legen nur ihre Masken mit dem Abbrecher offen) statt Neustart. Live-Modus als Standard. Vorab-Upload für mehrere Runden **nicht** übernommen (3× Datenmenge für ~3 % Fälle). |
+| F9 | **Größen** bei n = 50 grenzwertig für Mobilgeräte. | 🟡 | Slot von 72 B auf 40 B (nur `PDH` + Prüfsumme), Empfehlung n ≤ 30, Hartgrenze 50. Bit-Reservierungsrunde nicht übernommen (zusätzlicher Besuch). |
+| F10 | **Enthüllung zu kompliziert**: n² Attrappen unnötig, da HPKE/DHKEM key-private ist; Ed25519-Signaturen machen das Ergebnis übertragbar beweisbar. | 🟡 | Übernommen: **ein** Chiffretext pro Teilnehmer, HPKE-Auth mit `idh` + DH-MAC für das Pseudonym ⇒ einfacher, kleiner, abstreitbar. |
+| F11 | **Abbruchnachrichten** dürfen keinen Grund/keine Position enthalten. | 🟡 | Beschwerden haben ein festes Format ohne Freitext; Offenlegung nur über das Beweisverfahren. |
+| F12 | **Schlüsselvalidierung**: Low-Order-Punkte, Modulo-Bias bei Slot-Wahl. | 🟢 | Prüfung auf beitragende DH-Ergebnisse, beide Public Keys in HKDF-Info, Rejection-Sampling. |
+| F13 | **Datenreste**: gelöschte Vektoren in WAL/Freelist/Backups; `seed` im Browserverlauf/Lesezeichen-Sync. | 🟢 | `PRAGMA secure_delete`, WAL-Checkpoint, keine Backups der Live-DB; Hinweis in der UI. |
+
+**Fazit beider Reviews:** Der Ansatz (DC-Netz ⇒ anonymer Kreis ⇒ Enthüllung an den Schenker) trägt.
+Die kritischen Punkte lagen im Fehlerfall-Handling (F1–F3) und in der Ehrlichkeit des
+Bedrohungsmodells (A1/F5). Beides ist in v2 adressiert. Restrisiken, die bewusst akzeptiert werden:
+aktiv bösartiger Server (A1), Sybils ohne menschliche Prüfung (B1), Nachbarschafts-Wissen von
+Koalitionen (F4), ~3 % Kollisionsrunden.
+

@@ -82,12 +82,17 @@ Phase 4                                                                   └─
 ### Phase 1 – Parallele Kernarbeit (3 Agents, je eigener Worktree)
 
 **A1 „core“** 🦀 — `crates/wichtel-core`
-- Schlüsselableitung aus `seed`, Gruppenkontext `G`, AEAD für `GK`-Daten.
-- DC-Netz: Pads, Vektor, Ergebnis-Parsing, Kollisions-/Störungserkennung.
-- Kreisbildung, Reveal-Nachrichten (echt/Attrappe, Padding, HPKE, Signaturen), Auswertung.
+- Schlüsselableitung aus `seed` (alle Rundenschlüssel deterministisch), Gruppenkontext `G_r`,
+  AEAD mit AAD für `GK`-Daten, Commitments `(E_r, H(x_r))`, Low-Order-Prüfung.
+- DC-Netz: Pads, Vektor, Slot per Rejection-Sampling, Ergebnis-Parsing, Kollisionserkennung.
+- **Blame-Verfahren**: Offenlegung prüfen, jeden Vektor nachrechnen, Störer bzw. ehrliche
+  Kollision feststellen; Herausrechnen von Abbrechern über offengelegte Paarmasken.
+- Kreisbildung, Enthüllung (HPKE-Auth, DH-MAC, Padding), Auswertung, Beschwerde mit Beweis.
 - **Protokoll-Simulation** als Test: n ∈ {3, 4, 7, 20, 50} Clients + In-Memory-Briefkasten;
-  Szenarien: Normalfall, Kollision, Störer (Jamming, Doppel-Claim, falsche Signatur), Abbrecher,
-  Server-Equivocation (verschiedene Rosters). Property-Test: Ergebnis ist ein Kreis über alle.
+  Szenarien: Normalfall, ehrliche Kollision, Störer (Jamming ⇒ muss überführt werden),
+  Doppel-Claim und falscher MAC in der Enthüllung (⇒ Beschwerde überführt Täter), unbegründete
+  Beschwerde (⇒ Beschwerdeführer überführt), Abbrecher (⇒ Herausrechnen), Server-Equivocation
+  (verschiedene Rosters ⇒ Abbruch), vertauschte `enc_name` (⇒ abgelehnt). Property-Test: Ergebnis ist ein Kreis über alle.
 - Statistik-Test (klein, `#[ignore]` per Default): Gleichverteilung der Kreise für n=4.
 - Testvektoren-Datei für A4/A5.
 
@@ -95,7 +100,8 @@ Phase 4                                                                   └─
 - axum-Routen gemäß `wichtel-api`, Zustandsautomat, Auth (Hash-Vergleich in konstanter Zeit),
   Signaturprüfung der Uploads (nutzt nur die Verify-Funktion aus `core` – bis A1 fertig: Feature-Flag/Stub).
 - `Store`-Trait + `SqliteStore` (rusqlite, WAL, Migrations als SQL-Dateien).
-- XOR-Aggregation der DC-Vektoren, Freigabe erst bei Vollständigkeit, Vektoren danach löschen.
+- XOR-Aggregation der DC-Vektoren, Freigabe erst bei Vollständigkeit, Vektoren danach löschen
+  (`secure_delete`); Blame-/Beschwerde-Endpunkte; Neustart nur durch Admin, Rundenzähler öffentlich.
 - SSE-Endpunkt, Größen- und Rate-Limits, Ablauf-/Lösch-Job.
 - Logging ohne IPs; Security-Header (CSP, Referrer-Policy, …); Auslieferung von `web/dist` via rust-embed.
 - Integrationstests mit `tower::ServiceExt::oneshot` + temporärer SQLite-Datei.
