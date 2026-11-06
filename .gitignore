@@ -1,0 +1,8 @@
+/target/
+/web/node_modules/
+/web/dist/
+/web/src/wasm-pkg/
+*.db
+*.db-wal
+*.db-shm
+.DS_Store

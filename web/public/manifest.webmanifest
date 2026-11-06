@@ -1,0 +1,10 @@
+{
+  "name": "Weihnachtswichtel",
+  "short_name": "Wichteln",
+  "start_url": "/",
+  "display": "standalone",
+  "lang": "de",
+  "background_color": "#ffffff",
+  "theme_color": "#b3261e",
+  "icons": []
+}

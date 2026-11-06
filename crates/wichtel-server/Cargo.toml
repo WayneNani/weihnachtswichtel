@@ -1,0 +1,32 @@
+[package]
+name = "wichtel-server"
+description = "HTTP server (mailbox) for Weihnachtswichtel."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+wichtel-core.workspace = true
+wichtel-api.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rust-embed.workspace = true
+turso.workspace = true
+p256.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+getrandom.workspace = true
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }

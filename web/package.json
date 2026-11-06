@@ -1,0 +1,19 @@
+{
+  "name": "wichtel-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser UI for Weihnachtswichtel",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.sw.json"
+  },
+  "dependencies": {
+    "preact": "11.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

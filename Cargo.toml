@@ -1,0 +1,72 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/wichtel-core",
+    "crates/wichtel-api",
+    "crates/wichtel-wasm",
+    "crates/wichtel-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+rust-version = "1.90"
+
+# All dependencies are pinned here. Agents must not add new ones without the orchestrator.
+[workspace.dependencies]
+# internal
+wichtel-core = { path = "crates/wichtel-core" }
+wichtel-api = { path = "crates/wichtel-api" }
+
+# crypto (RustCrypto / dalek, rand_core 0.10 generation)
+x25519-dalek = { version = "=3.0.0", default-features = false, features = ["static_secrets", "zeroize"] }
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["zeroize"] }
+hpke = { version = "=0.15.1", default-features = false, features = ["alloc", "x25519", "chacha"] }
+chacha20 = { version = "=0.10.2", default-features = false, features = ["cipher", "rng", "zeroize"] }
+chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc"] }
+hkdf = { version = "=0.13.0", default-features = false }
+sha2 = { version = "=0.11.1", default-features = false }
+hmac = { version = "=0.13.0", default-features = false }
+subtle = { version = "=2.6.1", default-features = false }
+zeroize = { version = "=1.9.1", default-features = false, features = ["derive"] }
+rand_core = { version = "=0.10.1", default-features = false }
+getrandom = { version = "=0.4.3", default-features = false, features = ["sys_rng"] }
+
+# serialization / errors
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+base64 = "=0.23.1"
+thiserror = "=2.0.21"
+
+# wasm
+wasm-bindgen = "=0.2.130"
+js-sys = "=0.3.107"
+
+# server
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "matched-path", "tracing"] }
+tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+tower = { version = "=0.5.3", default-features = false, features = ["util"] }
+tower-http = { version = "=0.7.1", default-features = false, features = ["set-header", "limit"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+rust-embed = "=8.13.0"
+turso = { version = "=0.8.3", default-features = false }
+p256 = { version = "=0.14.0", default-features = false, features = ["ecdsa", "std"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider", "http2"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true
+
+[profile.release.package.wichtel-wasm]
+opt-level = "z"
