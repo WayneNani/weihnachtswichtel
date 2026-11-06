@@ -92,6 +92,24 @@ Ein HPKE-Seal kostet in jeder Variante unter 1 ms; den Ausschlag gibt der ChaCha
 Rollen-Vektor (n=30: 2,4 MB, 29 Paarmasken). `2` ist dort 5× schneller als `"s"` bei +12 KB gzip
 – vernachlässigbar neben dem 2,4-MB-Upload.
 
+## Browser-E2E-Tests
+
+```bash
+scripts/build-all.sh && scripts/e2e.sh    # = node --test --test-concurrency=1 'tests/e2e/*.test.mjs'
+```
+
+Node-Skripte (`node:test` + vorinstallierte `playwright`-Library, Chromium; kein `@playwright/test`).
+Jede Datei startet den Debug-Server mit temporärer DB auf freiem Port (Web-Push nur an
+`push.invalid` erlaubt, kein Abo) und **einen** Browser; jeder Teilnehmer ist ein eigener
+Browser-Kontext (= eigenes Gerät). Szenarien: Live-Modus n=4 (`01`, inkl. Datensparsamkeit: DB-Dateien
+roh durchsucht, alle Requests auf Fragment-Geheimnisse, Klartexte und fremde Hosts geprüft),
+Asynchron-Modus n=5 mit neuem Kontext pro Besuch (`02`), Verlosungstermin mit Countdown und
+automatischem Start (`03`, legt den Termin zuletzt per API auf den nächsten Minuten-Tick des
+Server-Jobs, ≈ 1 min), Austritt/Entfernen nach dem Ergebnis ⇒ Neuverlosung Nr. 2 und 3 (`04`),
+Kernseiten auf 390×844 ohne horizontales Scrollen (`05`). Laufzeit ≈ 1,5 min. Screenshots nur bei
+Fehlschlag in `tests/e2e/artifacts/`. Variablen: `WICHTEL_SERVER`, `E2E_HEADED=1`, `E2E_SLOWMO`,
+`E2E_KEEP=1` (Temp-Verzeichnis behalten), `E2E_DEBUG=1` (Browser-Konsolenfehler ausgeben).
+
 ## Last-Regeln für parallele Agents
 
 Siehe `docs/03-umsetzungsplan.md` §1. Kurzfassung:

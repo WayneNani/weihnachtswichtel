@@ -7,3 +7,4 @@
 *.db-shm
 .DS_Store
 /.claude/worktrees/
+/tests/e2e/artifacts/
