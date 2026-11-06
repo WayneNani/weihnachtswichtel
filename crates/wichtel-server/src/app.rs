@@ -514,6 +514,11 @@ impl App {
         if parts.iter().any(|p| p.pid == pid) {
             return Err(ApiError::conflict("already joined"));
         }
+        // Spec §5: IDH must be unique within the group (canonical form is checked by
+        // `verify_join` in wichtel-core).
+        if parts.iter().any(|p| p.idh == req.idh.0) {
+            return Err(ApiError::conflict("duplicate key"));
+        }
         if parts
             .iter()
             .any(|p| self.ops.ct_eq(&p.auth_hash, &req.auth_hash.0))

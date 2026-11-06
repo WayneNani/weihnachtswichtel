@@ -8,6 +8,10 @@
 //! clients' own positions instead of running the HPKE-heavy step 2. That is exactly the
 //! information the self-draw DC-net aggregates (Spec §9.1); its correctness is covered by
 //! `tests/simulation.rs`. Runs use the same group with increasing round numbers (fresh `G_r`).
+//!
+//! Environment: `WICHTEL_STATS_FULL=1` runs the complete protocol including the real step 2
+//! (self-draw DC-net, HPKE reveals, `open_result`); `WICHTEL_STATS_RUNS=<k>` sets the number of
+//! runs (default 1800; with the full protocol about 1.5 s per run in the debug profile).
 
 mod common;
 
@@ -18,18 +22,44 @@ use common::*;
 use wichtel_core::dcnet::{build_roles_vector, evaluate_roles, own_positions, xor_into};
 use wichtel_core::draw::sigma;
 use wichtel_core::roles_vector_len;
-use wichtel_core::roster::group_context;
+use wichtel_core::roster::{Roster, group_context};
 
 const N: usize = 4;
-const RUNS: u32 = 1800;
 const THREADS: u32 = 2;
+
+fn runs() -> u32 {
+    std::env::var("WICHTEL_STATS_RUNS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1800)
+}
+
+fn full() -> bool {
+    std::env::var("WICHTEL_STATS_FULL").is_ok_and(|v| v == "1")
+}
+
+/// Like [`draw`], but with the real step 2 via the shared mailbox driver.
+fn draw_full(
+    gid: &wichtel_core::GroupId,
+    clients: &[Client],
+    roster: &Roster,
+    round: u32,
+) -> Option<Vec<usize>> {
+    let refs: Vec<&Client> = clients.iter().collect();
+    let views = vec![roster; clients.len()];
+    let report = run_round(gid, round, roster, &views, &refs, &Faults::default());
+    match report {
+        RoundReport::Done { .. } => Some(check_done(&refs, &report)),
+        _ => None,
+    }
+}
 
 /// Assignment `giver → recipient` (client indices) of round `round`, or `None` if the round
 /// does not finish (collision / no attempt without self-draw).
 fn draw(
     gid: &wichtel_core::GroupId,
     clients: &[Client],
-    roster: &wichtel_core::roster::Roster,
+    roster: &Roster,
     round: u32,
 ) -> Option<Vec<usize>> {
     let mut agg = vec![0u8; roles_vector_len(N)];
@@ -72,6 +102,7 @@ fn draw(
 #[ignore]
 fn derangements_are_uniform_n4() {
     let gid = gid_for(424_242);
+    let (runs, full) = (runs(), full());
     let counts: HashMap<Vec<usize>, u32> = {
         let gid = Arc::new(gid);
         let handles: Vec<_> = (0..THREADS)
@@ -83,8 +114,9 @@ fn derangements_are_uniform_n4() {
                     let mut counts = HashMap::new();
                     let mut done = 0;
                     let mut round = 1 + th * 1_000_000;
-                    while done < RUNS / THREADS {
-                        if let Some(a) = draw(&gid, &clients, &roster, round) {
+                    let f = if full { draw_full } else { draw };
+                    while done < runs / THREADS {
+                        if let Some(a) = f(&gid, &clients, &roster, round) {
                             for (i, &j) in a.iter().enumerate() {
                                 assert_ne!(i, j);
                             }
@@ -106,7 +138,8 @@ fn derangements_are_uniform_n4() {
         total
     };
     assert_eq!(counts.len(), 9, "{counts:?}");
-    let expected = f64::from(RUNS) / 9.0;
+    let total = runs / THREADS * THREADS;
+    let expected = f64::from(total) / 9.0;
     let chi2: f64 = counts
         .values()
         .map(|&c| (f64::from(c) - expected).powi(2) / expected)
@@ -116,6 +149,8 @@ fn derangements_are_uniform_n4() {
     for (k, v) in &sorted {
         eprintln!("{k:?}: {v}");
     }
-    eprintln!("chi2 = {chi2:.3} (df = 8, 5 %: 15.51, 0.1 %: 26.12), runs = {RUNS}");
+    eprintln!(
+        "chi2 = {chi2:.3} (df = 8, 5 %: 15.51, 0.1 %: 26.12), runs = {total}, full step 2: {full}"
+    );
     assert!(chi2 < 26.12, "chi2 = {chi2}");
 }

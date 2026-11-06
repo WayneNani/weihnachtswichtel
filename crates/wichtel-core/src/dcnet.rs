@@ -1,7 +1,7 @@
 //! Step 1: role vector (DC-net) and evaluation of the aggregate `R` (Spec §7).
 
 use subtle::ConstantTimeEq;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::draw::UniformSampler;
 use crate::keys::{ParticipantKeys, pid_from_ipk};
@@ -160,7 +160,7 @@ pub(crate) fn apply_pair_masks(
     roster: &Roster,
     own_index: usize,
     g_r: &[u8; 32],
-    label: &[u8],
+    label: &[&[u8]],
     buf: &mut [u8],
 ) -> Result<()> {
     let own_idh = keys.public().idh;
@@ -174,7 +174,11 @@ pub(crate) fn apply_pair_masks(
         } else {
             (&other.idh, &own_idh)
         };
-        let k = hkdf32(g_r, dh.as_ref(), &[label, lo, hi]);
+        // info = label parts ‖ lo ‖ hi.
+        let mut info: Vec<&[u8]> = label.to_vec();
+        info.push(lo);
+        info.push(hi);
+        let k = hkdf32(g_r, dh.as_ref(), &info);
         xor_keystream(&k, &[0u8; 12], buf);
     }
     Ok(())
@@ -204,7 +208,7 @@ pub fn build_roles_vector(
         roster,
         ctx.own_index,
         &ctx.g_r,
-        b"wichtel/v1/dc-roles",
+        &[b"wichtel/v1/dc-roles"],
         &mut v,
     )?;
     Ok(v)
@@ -311,13 +315,20 @@ pub fn evaluate_roles(g_r: &[u8; 32], n: usize, r: &[u8]) -> Result<RolesOutcome
     })
 }
 
-/// Positions of the local participant in an outcome.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Positions of the local participant in an outcome. Secret (they link the own roles):
+/// zeroized on drop, `Debug` is redacted.
+#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct OwnPositions {
     /// E-position `e_i`.
     pub e: usize,
     /// `p_{i,t}` for valid attempts (index t−1), `None` for invalid ones.
     pub p: [Option<usize>; T_ATTEMPTS],
+}
+
+impl core::fmt::Debug for OwnPositions {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OwnPositions { <redacted> }")
+    }
 }
 
 /// Position of `own_slot` among the occupied slots of `area` and whether that slot holds

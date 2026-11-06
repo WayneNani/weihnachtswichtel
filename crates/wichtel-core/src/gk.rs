@@ -12,10 +12,15 @@ const L_TAG: usize = 16;
 /// Padding block size.
 const PAD_BLOCK: usize = 32;
 
+/// The fixed group id `Z(16)` used in the AAD of `enc_meta` (Spec §6, the real `gid` is only
+/// assigned by the server after `enc_meta` was sent).
+pub const META_GID: GroupId = GroupId([0u8; 16]);
+
 /// What is being encrypted; determines the AAD and size limit.
 #[derive(Clone, Copy, Debug)]
 pub enum GkContext<'a> {
-    /// `"wichtel/v1/meta" ‖ gid`, limit `META_MAX`.
+    /// `"wichtel/v1/meta" ‖ gid`, limit `META_MAX`. Per Spec §6 the AAD uses the fixed
+    /// null id `Z(16)`: pass [`META_GID`].
     Meta { gid: &'a GroupId },
     /// `"wichtel/v1/name" ‖ gid ‖ pid ‖ IPK ‖ IDH`, limit `NAME_MAX`.
     Name {

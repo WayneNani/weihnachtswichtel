@@ -60,7 +60,7 @@
       ],
       "pid": "G8Jtkq-DsvhTMKgEqPE9-w",
       "recipient_pid": "5X5Y3RjeZI8WzEsYlxZQYA",
-      "reveal_upload_sha256": "4ok_P38otvdXfYTtKBAeULjamvwD9SvUyODXELdfSzc",
+      "reveal_upload_sha256": "k1nmqruFtg4QJ5CbU9ot41txpWMbCITNOdmi8oJPiJ4",
       "roles_vector_sha256": "Y9evcIhhsrzYaUJecrXyCdXkN-Q84i3k5WwBxYsE4Ho",
       "seed": "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8"
     },
@@ -93,7 +93,7 @@
       ],
       "pid": "TVhNh0GqAk0WIRNCVmuHNg",
       "recipient_pid": "G8Jtkq-DsvhTMKgEqPE9-w",
-      "reveal_upload_sha256": "AgiZznxA0z6usvebFJd1a94B0F51hXE3M-gtfxozNs0",
+      "reveal_upload_sha256": "_7xk9MBJM26dB85VwXf5eXxJkeJSnj0sNsc5_LBgFIY",
       "roles_vector_sha256": "vWWLx-xWa7CFiRylhuRlFYw3rrEV9OPIr9yez4AwPbg",
       "seed": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
     },
@@ -126,7 +126,7 @@
       ],
       "pid": "cU5xtO6IR0r8s6fbJ-srPQ",
       "recipient_pid": "TVhNh0GqAk0WIRNCVmuHNg",
-      "reveal_upload_sha256": "wI6o-77xPbC-gv0m5XEVVGpxh65Bs22KPqxMtLrd1y0",
+      "reveal_upload_sha256": "Z9GKteWnH4xP2LMpDgs_8mGbS7EcJZOCNAtbDf6lPkI",
       "roles_vector_sha256": "bpbIeg304JlT1yTal5i0lwGaUkQNoBrGQ22n5-lzdJQ",
       "seed": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
     },
@@ -159,7 +159,7 @@
       ],
       "pid": "5X5Y3RjeZI8WzEsYlxZQYA",
       "recipient_pid": "cU5xtO6IR0r8s6fbJ-srPQ",
-      "reveal_upload_sha256": "WppTI1bh4_VmmgTwXhjMyGj2mqXL-5_I_WoEQqHwjuU",
+      "reveal_upload_sha256": "I08YsfgU4ieS_CrpMBkruQBZbjWFVpPydVMCc_T4bdk",
       "roles_vector_sha256": "ib0OOGtlZwfCcNe40ZEsUJQSV3toPhA7yK3JKVqM0WA",
       "seed": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8"
     }

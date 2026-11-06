@@ -269,6 +269,12 @@ async fn join_rules() {
     // Duplicate.
     assert_eq!(join(&t, &g, &a).await.status, StatusCode::CONFLICT);
 
+    // Another identity reusing A's IDH (Spec §5: IDH unique per group).
+    let mut same_idh = FakeClient::new(&g.gid, 8);
+    same_idh.idh = a.idh;
+    let r = join(&t, &g, &same_idh).await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+
     // Bad signature.
     let b = FakeClient::new(&g.gid, 2);
     let mut req = b.join_request(&g.gid);

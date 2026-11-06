@@ -42,14 +42,18 @@ pub struct Roster {
 }
 
 impl Roster {
-    /// Sort by `pid`, reject duplicates and `n > N_MAX`.
+    /// Sort by `pid`, reject duplicates, invalid `IDH`s and `n > N_MAX`.
     ///
-    /// Errors: `InvalidParticipantCount` for `n > N_MAX`; `InvalidEncoding` for a duplicate
-    /// `pid` or a duplicate `IDH`. `n < N_MIN` is allowed here (an open group may be smaller);
-    /// the draw functions check the lower bound.
+    /// Errors: `InvalidParticipantCount` for `n > N_MAX`; `InvalidKey` for an `IDH` that fails
+    /// [`crate::keys::validate_idh`]; `InvalidEncoding` for a duplicate `pid` or a duplicate
+    /// `IDH`. `n < N_MIN` is allowed here (an open group may be smaller); the draw functions
+    /// check the lower bound.
     pub fn new(mut entries: Vec<RosterEntry>) -> Result<Self> {
         if entries.len() > N_MAX {
             return Err(Error::InvalidParticipantCount);
+        }
+        for e in &entries {
+            crate::keys::validate_idh(&e.idh)?;
         }
         entries.sort_by_key(|e| e.pid);
         if entries.windows(2).any(|w| w[0].pid == w[1].pid) {
@@ -136,6 +140,15 @@ mod tests {
         let many: Vec<_> = (0..=N_MAX as u8).map(entry).collect();
         assert_eq!(Roster::new(many), Err(Error::InvalidParticipantCount));
         assert!(Roster::new(vec![]).unwrap().is_empty());
+        let mut bad_idh = entry(4);
+        bad_idh.idh = [0u8; 32];
+        assert_eq!(
+            Roster::new(vec![entry(1), bad_idh.clone()]),
+            Err(Error::InvalidKey)
+        );
+        bad_idh.idh = entry(4).idh;
+        bad_idh.idh[31] |= 0x80;
+        assert_eq!(Roster::new(vec![bad_idh]), Err(Error::InvalidKey));
     }
 
     #[test]

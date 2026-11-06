@@ -123,7 +123,7 @@ async fn setup(t: &TestApp, names: &[&str]) -> (GroupId, String, [u8; 32], [u8; 
             keys: k,
         });
     }
-    (gid, gid_s, admin, gk_secret, clients)
+    (gid, gid_s, *admin, *gk_secret, clients)
 }
 
 /// Drive the protocol until `done`; returns `giver pid → (recipient pid, note)`.
@@ -226,7 +226,7 @@ async fn run_protocol(
                         &c.keys, gid, round, &roster, &outcome, &own, t_star, &reveals,
                     )
                     .unwrap();
-                    out.push((c.pid(), res.recipient, res.note));
+                    out.push((c.pid(), res.recipient, res.note.clone()));
                 }
                 return out;
             }
