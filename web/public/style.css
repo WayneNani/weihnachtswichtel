@@ -317,6 +317,10 @@ input[readonly] {
   color: var(--red);
   font-size: 0.9rem;
 }
+/* "Persönlichen Link zeigen" next to the "Austreten" button. */
+.btn + .leave-link {
+  margin-left: 12px;
+}
 .button-row {
   display: flex;
   flex-wrap: wrap;

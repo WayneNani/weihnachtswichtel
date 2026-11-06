@@ -191,6 +191,9 @@ export class GroupController {
         void this.refresh();
       });
       es.addEventListener("error", () => {
+        // The stream broke (server closed it, e.g. the group was deleted, or the network dropped):
+        // fetch the current state right away instead of waiting for the next poll.
+        void this.refresh();
         this.esErrors++;
         if (this.esErrors >= 3 || es.readyState === 2) {
           es.close();

@@ -49,6 +49,8 @@ function GroupPageInner({ route, secretsFromUrl }: { route: GroupRoute; secretsF
   const [saveDialog, setSaveDialog] = useState<"forced" | "info" | null>(null);
   const [editing, setEditing] = useState(false);
   const [leaveError, setLeaveError] = useState<string | null>(null);
+  /** Left the group on this page (so the page does not ask for a personal link afterwards). */
+  const [left, setLeft] = useState(false);
 
   useEffect(() => {
     // Remember what this device knows (never overwrite another stored seed with a different one).
@@ -128,6 +130,7 @@ function GroupPageInner({ route, secretsFromUrl }: { route: GroupRoute; secretsF
       saveGroup(route.gidB64, { s: undefined, pid: undefined, note: undefined, push: undefined, linkSaved: undefined });
       void forgetPush(route.gidB64);
       ctrl.setSeed(null);
+      setLeft(true);
       await ctrl.refresh();
     } catch (e) {
       setLeaveError(errorText(e));
@@ -182,7 +185,11 @@ function GroupPageInner({ route, secretsFromUrl }: { route: GroupRoute; secretsF
       {view.state === "open" && !snap.isMember && (
         <section class="card" aria-labelledby="join-title">
           <h2 id="join-title">{secrets.s ? "Du bist nicht (mehr) in der Liste" : "Mitmachen"}</h2>
-          {secrets.s ? (
+          {left ? (
+            <Notice kind="ok" title="Du bist ausgetreten">
+              Solange die Verlosung nicht gestartet ist, kannst du dich hier wieder eintragen.
+            </Notice>
+          ) : secrets.s ? (
             <p>Dieses Gerät kennt dich, aber du stehst nicht in der Teilnehmerliste – vielleicht wurdest du entfernt. Du kannst dich erneut eintragen.</p>
           ) : (
             <p class="hint">
@@ -221,7 +228,11 @@ function GroupPageInner({ route, secretsFromUrl }: { route: GroupRoute; secretsF
 
       {view.state !== "open" && !snap.isMember && !adminSecret && (
         <section class="card">
-          {secrets.s ? (
+          {left ? (
+            <Notice kind="ok" title="Du bist ausgetreten">
+              Du nimmst an dieser Verlosung nicht mehr teil. Für alle anderen wird neu ausgelost.
+            </Notice>
+          ) : secrets.s ? (
             <Notice kind="warn" title="Du bist nicht mehr dabei">
               Du stehst nicht in der Teilnehmerliste dieser Verlosung – vermutlich wurdest du entfernt.
             </Notice>
@@ -324,7 +335,7 @@ function GroupPageInner({ route, secretsFromUrl }: { route: GroupRoute; secretsF
           </ConfirmButton>
           {leaveError && <Notice kind="error">{leaveError}</Notice>}
           {view.state !== "open" && personalLink && (
-            <button type="button" class="btn-link" onClick={() => setSaveDialog("info")}>
+            <button type="button" class="btn-link leave-link" onClick={() => setSaveDialog("info")}>
               Persönlichen Link zeigen
             </button>
           )}
