@@ -77,7 +77,7 @@ pub struct GroupId(pub [u8; 16]);
 pub struct Pid(pub [u8; 16]);
 
 /// All errors of this crate. Variants must not carry secret data or positions.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
     #[error("invalid length")]
     InvalidLength,

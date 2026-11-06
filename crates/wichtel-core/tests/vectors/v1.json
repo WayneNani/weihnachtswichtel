@@ -1,0 +1,271 @@
+{
+  "attempt_valid": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true
+  ],
+  "fingerprint": [
+    "Pudel",
+    "Schnee",
+    "Bank",
+    "Eis",
+    "Kirsche",
+    "Rubin",
+    "Rose",
+    "Schnee"
+  ],
+  "g_r": "sa26U6MXobpzi5lhuwfRf20uZ5FGkMvgYgJT--aufx4",
+  "gid": "oKGio6SlpqeoqaqrrK2uAg",
+  "gk": "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s",
+  "participants": [
+    {
+      "auth_hash": "q3EOK8Y0WBNt-wwGxAiS26-ig80HqoJ7dqSDVqpgKQw",
+      "e": 3,
+      "enc_name": "MzMzMzMzMzMzMzMztY0xYifo4yEOqsBQd3gwHqDpp-zsD3rkYQOX_2TzOfkyTtsJXnlQJg5602n9qTK8",
+      "enc_name_nonce": "MzMzMzMzMzMzMzMz",
+      "idh": "yc2yd6VclEHiim_u24j88rtxYp9zOs9IvSQxI7O4iBw",
+      "ipk": "HN5Ppk5LCL1GJ1oDPw44KVZvP-AfrebU8aW0ZKKhaA4",
+      "name": "David",
+      "note": "Notiz von David",
+      "p": [
+        1,
+        2,
+        0,
+        1,
+        1,
+        1,
+        null,
+        1,
+        0,
+        1,
+        0,
+        2,
+        3,
+        2,
+        2,
+        3
+      ],
+      "pid": "G8Jtkq-DsvhTMKgEqPE9-w",
+      "recipient_pid": "5X5Y3RjeZI8WzEsYlxZQYA",
+      "reveal_upload_sha256": "4ok_P38otvdXfYTtKBAeULjamvwD9SvUyODXELdfSzc",
+      "roles_vector_sha256": "Y9evcIhhsrzYaUJecrXyCdXkN-Q84i3k5WwBxYsE4Ho",
+      "seed": "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8"
+    },
+    {
+      "auth_hash": "F-0xoNhcUb186keHBFvOH1s3Ys35CBePN_K4QH_qLZc",
+      "e": 1,
+      "enc_name": "MTExMTExMTExMTExd5Of5eJ6bzNJnvTcKU34piT-IyZ69iKrbepG3mmVtYW-jKWaWBI1_5jBYDS2nQQr",
+      "enc_name_nonce": "MTExMTExMTExMTEx",
+      "idh": "BUO214MKah5xxPo6qJoxvLHWNV_jhhwEjuHOuAA8k0k",
+      "ipk": "hXC3PSbIl4p-5lLz_kDWOS3C8ETeZ8gOxbo4y8egKaU",
+      "name": "Ben",
+      "note": "Notiz von Ben",
+      "p": [
+        3,
+        1,
+        3,
+        0,
+        0,
+        0,
+        null,
+        0,
+        1,
+        3,
+        3,
+        1,
+        1,
+        3,
+        0,
+        2
+      ],
+      "pid": "TVhNh0GqAk0WIRNCVmuHNg",
+      "recipient_pid": "G8Jtkq-DsvhTMKgEqPE9-w",
+      "reveal_upload_sha256": "AgiZznxA0z6usvebFJd1a94B0F51hXE3M-gtfxozNs0",
+      "roles_vector_sha256": "vWWLx-xWa7CFiRylhuRlFYw3rrEV9OPIr9yez4AwPbg",
+      "seed": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+    },
+    {
+      "auth_hash": "iBqCdVIQSTbYP9jAX74xQsuibm69QnzBwSuC6IyKAjU",
+      "e": 2,
+      "enc_name": "MDAwMDAwMDAwMDAwJpiUw07NJFOZAGU4Xmok-pxuDGJP_2HieVUF9R0Y5mNj7X6iXmw_71Zcg7IxmqUt",
+      "enc_name_nonce": "MDAwMDAwMDAwMDAw",
+      "idh": "y7ZZsKs0Z-DN3ij3cN0cBa4UMe702YEN-8EuCy0hKzE",
+      "ipk": "WRsiPvfHILdRiY4755pb5IGK0cENCd1ZZX1YphilUUk",
+      "name": "Anna",
+      "note": "Notiz von Anna",
+      "p": [
+        0,
+        0,
+        2,
+        2,
+        2,
+        3,
+        null,
+        3,
+        2,
+        2,
+        2,
+        3,
+        0,
+        0,
+        1,
+        1
+      ],
+      "pid": "cU5xtO6IR0r8s6fbJ-srPQ",
+      "recipient_pid": "TVhNh0GqAk0WIRNCVmuHNg",
+      "reveal_upload_sha256": "wI6o-77xPbC-gv0m5XEVVGpxh65Bs22KPqxMtLrd1y0",
+      "roles_vector_sha256": "bpbIeg304JlT1yTal5i0lwGaUkQNoBrGQ22n5-lzdJQ",
+      "seed": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "auth_hash": "RUu3wSNQ0koNS1_IsLaeUJBBpv1iu43dxkS_j4dokhU",
+      "e": 0,
+      "enc_name": "MjIyMjIyMjIyMjIyr9_rsT1MLTbWSOGt3etNbYQC9YYS5ipH97z-WDRiG0CO0hQaxjxczGuPOGQkuN9v",
+      "enc_name_nonce": "MjIyMjIyMjIyMjIy",
+      "idh": "A7hIruCD_PiOwXrNET1iTK-cjOZ6_akPpgPOY-O8jWE",
+      "ipk": "Q-H6oWLCOCuD0kmK2dAz4vC4U3H5x0vHGIrFYB33Hnc",
+      "name": "Clara",
+      "note": "Notiz von Clara",
+      "p": [
+        2,
+        3,
+        1,
+        3,
+        3,
+        2,
+        null,
+        2,
+        3,
+        0,
+        1,
+        0,
+        2,
+        1,
+        3,
+        0
+      ],
+      "pid": "5X5Y3RjeZI8WzEsYlxZQYA",
+      "recipient_pid": "cU5xtO6IR0r8s6fbJ-srPQ",
+      "reveal_upload_sha256": "WppTI1bh4_VmmgTwXhjMyGj2mqXL-5_I_WoEQqHwjuU",
+      "roles_vector_sha256": "ib0OOGtlZwfCcNe40ZEsUJQSV3toPhA7yK3JKVqM0WA",
+      "seed": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8"
+    }
+  ],
+  "r_sha256": "w-OskwimITqleIXKlUM40HneeZkxEl3vyRp0EZCmk2o",
+  "rho": "ITEH0uBLStEnH55OOOIUjBHIwuqEVyNigGC5e3yaRC8",
+  "round": 1,
+  "selfdraw_aggregate": "JfMlgJSJ091v6XiYTPwTltHYoZQblH-YQRio9arbGHWXDTNNhWq3p_D-I59kF6y95mh7OUhJtJLuQI7q-CuhRy_PL-l8-g5SsEjl1B6yDPoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYwsO1NZlHDcR-2R09yyDvw",
+  "sigma": [
+    [
+      1,
+      3,
+      0,
+      2
+    ],
+    [
+      3,
+      1,
+      0,
+      2
+    ],
+    [
+      3,
+      1,
+      0,
+      2
+    ],
+    [
+      3,
+      0,
+      2,
+      1
+    ],
+    [
+      1,
+      0,
+      2,
+      3
+    ],
+    [
+      3,
+      0,
+      2,
+      1
+    ],
+    [
+      1,
+      3,
+      2,
+      0
+    ],
+    [
+      0,
+      2,
+      3,
+      1
+    ],
+    [
+      1,
+      2,
+      0,
+      3
+    ],
+    [
+      3,
+      2,
+      1,
+      0
+    ],
+    [
+      1,
+      2,
+      3,
+      0
+    ],
+    [
+      3,
+      0,
+      2,
+      1
+    ],
+    [
+      0,
+      2,
+      3,
+      1
+    ],
+    [
+      3,
+      1,
+      2,
+      0
+    ],
+    [
+      2,
+      3,
+      0,
+      1
+    ],
+    [
+      3,
+      2,
+      1,
+      0
+    ]
+  ],
+  "t_star": 6,
+  "version": "wichtel/v1"
+}
