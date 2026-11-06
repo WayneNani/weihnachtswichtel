@@ -11,10 +11,11 @@ use wichtel_server::{App, Config, routes, spawn_jobs};
 
 #[tokio::main]
 async fn main() {
-    // No ANSI colours, no targets: logs carry neither IPs nor user agents (Konzept §7.5).
+    // Logs carry neither IPs nor user agents nor path parameters (Konzept §7.5).
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,turso=warn,turso_core=warn".into()),
         )
         .with_target(false)
         .init();
