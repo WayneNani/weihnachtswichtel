@@ -10,6 +10,7 @@ import { computeRolesInline, decide, ProtocolDriver, type DriverStatus } from ".
 import { decodeMeta, decodeRoster, sealMeta } from "../protocol/roster";
 import { buildJoinRequest } from "../ui/join";
 import type { ParticipantKeysHandle, WichtelWasm } from "../wasm-api";
+import { classifyWasmError, wasmErrorText, wichtelError, wichtelErrorCode } from "../wasm-errors";
 
 // ------------------------------------------------------------ pure decision
 
@@ -261,4 +262,56 @@ test("join after start is rejected; invalid name entries block participation", a
   const st = await s.players[0]!.driver.step(v2, roster.entries, roster.allValid);
   assert.deepEqual(st, { kind: "inactive", reason: "invalid_roster" });
   await assert.rejects(s.api.join(s.gidB64, buildJoinRequest(s.wasm, s.k, s.gid, s.wasm.deriveKeys(s.wasm.generateSecret(), s.gid), "Late", "")));
+});
+
+test("WASM error codes map onto driver states (roster ⇒ disturbance, state ⇒ recompute)", async () => {
+  const base = createMockWasm();
+  let failRoles: string | null = "NOT_IN_ROSTER";
+  let failReveal: string | null = "INVALID_STATE";
+  const wasm: WichtelWasm = {
+    ...base,
+    buildRolesVector: (...args) => {
+      if (failRoles) throw wichtelError(failRoles, `${failRoles}: test`);
+      return base.buildRolesVector(...args);
+    },
+    buildRevealUpload: (...args) => {
+      if (failReveal) throw wichtelError(failReveal, `${failReveal}: test`);
+      return base.buildRevealUpload(...args);
+    },
+  };
+  const s = await setup({ n: 4, wasm });
+  await s.api.start(s.gidB64, s.a);
+  let v = await s.api.getGroup(s.gidB64);
+  let roster = decodeRoster(wasm, s.k, s.gid, v.participants);
+  const p0 = s.players[0]!;
+  assert.deepEqual(await p0.driver.step(v, roster.entries, true), { kind: "disturbance", round: 1, reason: "roster_mismatch" });
+  // Stays disturbed for this round (no upload).
+  assert.equal((await p0.driver.step(v, roster.entries, true)).kind, "disturbance");
+  assert.equal((await s.api.getGroup(s.gidB64)).progress?.submitted.length ?? 0, 0);
+
+  // New draw; step 2 with an unusable evaluation state: retry (cached state dropped), then success.
+  failRoles = null;
+  await s.api.restart(s.gidB64, s.a);
+  v = await s.api.getGroup(s.gidB64);
+  roster = decodeRoster(wasm, s.k, s.gid, v.participants);
+  for (const p of s.players) await p.driver.step(v, roster.entries, true);
+  v = await s.api.getGroup(s.gidB64);
+  assert.equal(v.state === "drawing" && v.phase, "reveal");
+  const round = (v as { round: number }).round;
+  const p1 = s.players[1]!;
+  assert.deepEqual(await p1.driver.step(v, roster.entries, true), { kind: "retry", message: "Zwischenstand wird neu berechnet" });
+  assert.equal(await s.kv.get(`eval:${s.gidB64}:${p1.driver.pidB64}:${round}`), undefined);
+  failReveal = null;
+  assert.deepEqual(await p1.driver.step(v, roster.entries, true), { kind: "uploaded", step: 2, round });
+});
+
+test("WichtelError code survives as error text and classification", () => {
+  const e = wichtelError("RNG_UNAVAILABLE", "RNG_UNAVAILABLE: randomness unavailable");
+  assert.equal(wichtelErrorCode(e), "RNG_UNAVAILABLE");
+  assert.equal(classifyWasmError(e), "transient");
+  assert.equal(classifyWasmError(wichtelError("STATE_MISMATCH", "x")), "state");
+  assert.equal(classifyWasmError(wichtelError("REVEAL_COUNT", "x")), "data");
+  assert.equal(classifyWasmError(new Error("null pointer passed to rust")), "transient");
+  assert.equal(wichtelErrorCode(wichtelError("NOPE", "x")), null);
+  assert.match(wasmErrorText("RNG_UNAVAILABLE"), /Zufall/);
 });

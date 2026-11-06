@@ -3,6 +3,7 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { utf8 } from "../lib/bytes";
 import { encodeQr, qrPath } from "../lib/qr";
+import { wasmErrorText, wichtelErrorCode } from "../wasm-errors";
 
 // ------------------------------------------------------------ formatting
 
@@ -227,6 +228,8 @@ export function Notice(props: { kind?: "info" | "warn" | "error" | "ok"; title?:
 }
 
 export function errorText(e: unknown): string {
+  const wasmCode = wichtelErrorCode(e);
+  if (wasmCode) return wasmErrorText(wasmCode);
   if (e && typeof e === "object" && "code" in e) {
     const code = (e as { code: string }).code;
     switch (code) {

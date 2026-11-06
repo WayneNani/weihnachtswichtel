@@ -182,6 +182,7 @@ const DISTURBANCE_TEXT: Record<DisturbanceReason, string> = {
   evaluation_mismatch: "Das Ergebnis von Schritt 1 ist für deinen Browser ungültig, der Server hat aber weitergemacht.",
   t_star_mismatch: "Der Server meldet einen anderen Auslosungsversuch, als dein Browser berechnet hat.",
   open_failed: "Für dich ließ sich nicht genau eine gültige Enthüllung öffnen.",
+  roster_mismatch: "Die Teilnehmerliste vom Server passt nicht zu deinem Schlüssel oder ist fehlerhaft.",
 };
 
 export function DisturbanceCard({ reason, drawNo }: { reason: DisturbanceReason; drawNo: number }) {

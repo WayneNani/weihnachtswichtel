@@ -43,7 +43,22 @@ cargo run -p wichtel-server        # http://127.0.0.1:8080/api/health
 ```bash
 scripts/build-wasm.sh          # → web/src/wasm-pkg/ (gitignored), wasm-bindgen --target web
 node scripts/test-wasm.mjs     # Testvektoren, Fehlercodes, Protokolldurchlauf n=4, Laufzeiten
+
+scripts/build-all.sh           # build-wasm.sh → npm run build (web/dist) → cargo build -p wichtel-server
+node scripts/smoke.mjs         # echter Server + echtes WASM, 4 simulierte Clients über HTTP
 ```
+
+`smoke.mjs` bündelt die Protokoll-Bausteine der UI (`web/src/api`, `protocol/`, `ui/join.tsx`,
+`wasm.ts`) mit esbuild für Node (`__MOCK__ = false`), startet `wichtel-server` mit temporärer
+Datenbank auf einem freien Port, prüft die ausgelieferten Dateien (`/pkg/*.wasm` als
+`application/wasm`, kein Mock-Code) und spielt Anlegen, Beitreten, Start, beide Schritte und das
+Ergebnis durch: jeder hat genau einen Beschenkten, niemand sich selbst. `SMOKE_N=8` für mehr
+Teilnehmer, `SMOKE_KEEP=1` behält Temp-Verzeichnis und DB.
+
+In der UI bildet `web/src/wasm.ts` die wasm-bindgen-Exporte auf `WichtelWasm` ab (Seite und
+Web Worker laden je eine eigene Instanz); `web/src/wasm-errors.ts` ordnet die Fehlercodes den
+Zuständen des Protokoll-Treibers zu (Teilnehmerliste passt nicht ⇒ Störung, unbrauchbarer
+Zwischenstand ⇒ neu berechnen, sonst erneuter Versuch) und liefert deutsche Fehlertexte.
 
 `build-wasm.sh` baut `crates/wichtel-wasm` mit
 `cargo build --target wasm32-unknown-unknown --profile wasm-release -p wichtel-wasm` und erzeugt

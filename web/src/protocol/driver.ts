@@ -17,6 +17,7 @@ import { N_MAX, NOTE_MAX, type GroupView } from "../api/types";
 import { b64uDecode, b64uDecodeLen, b64uEncode, utf8Len } from "../lib/bytes";
 import type { KvStore } from "../lib/idb";
 import type { ParticipantKeysHandle, RosterEntryInput, WichtelWasm } from "../wasm-api";
+import { classifyWasmError } from "../wasm-errors";
 
 export interface RolesJob {
   seed: Uint8Array;
@@ -32,7 +33,8 @@ export interface RolesJobResult {
 
 export type DisturbanceReason =
   | "own_role_missing" // §7.4
-  | "evaluation_mismatch" // server proceeded although R is invalid for us
+  | "evaluation_mismatch" // server proceeded although R is invalid for us, or sent malformed data
+  | "roster_mismatch" // roster does not fit the own keys / forged pid (WASM: NOT_IN_ROSTER, INVALID_KEY, …)
   | "t_star_mismatch" // §9.1
   | "open_failed"; // §9.3 (≠ 1 valid reveal)
 
@@ -162,6 +164,20 @@ export class ProtocolDriver {
         // 409: phase moved on or duplicate upload – the caller refetches and we re-decide.
         if (e.status === 409) return { kind: "retry", message: "Zustand hat sich geändert" };
         return { kind: "retry", message: e.code === "network" ? "Keine Verbindung zum Server" : `Serverfehler (${e.code})` };
+      }
+      // Errors of the WASM core (WichtelError.code), see ../wasm-errors.ts. No message to the
+      // server in any of these cases (Spec §11).
+      switch (classifyWasmError(e)) {
+        case "roster":
+          return this.disturbance(plan.round, "roster_mismatch");
+        case "data":
+          return this.disturbance(plan.round, plan.kind === "roles" ? "roster_mismatch" : "evaluation_mismatch");
+        case "state":
+          // Cached evaluation state unusable (corrupt / other roster): recompute on the next step.
+          await this.deps.kv.del(this.key("eval", plan.round));
+          return { kind: "retry", message: "Zwischenstand wird neu berechnet" };
+        case "transient":
+          break;
       }
       return { kind: "retry", message: e instanceof Error ? e.message : String(e) };
     }

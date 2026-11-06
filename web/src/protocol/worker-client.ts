@@ -1,8 +1,9 @@
 /** Runs role-vector jobs in `/worker.js`; falls back to the main thread if workers fail. */
 import type { WichtelWasm } from "../wasm-api";
+import { wichtelError } from "../wasm-errors";
 import { computeRolesInline, type RolesJob, type RolesJobResult } from "./driver";
 
-type Reply = { id: number; ok: true; body: Uint8Array; sig: Uint8Array } | { id: number; ok: false; error: string };
+type Reply = { id: number; ok: true; body: Uint8Array; sig: Uint8Array } | { id: number; ok: false; error: string; code?: string | null };
 
 export function createRolesComputer(getWasm: () => Promise<WichtelWasm>): (job: RolesJob) => Promise<RolesJobResult> {
   let worker: Worker | null = null;
@@ -25,7 +26,7 @@ export function createRolesComputer(getWasm: () => Promise<WichtelWasm>): (job: 
         if (!w) return;
         waiting.delete(ev.data.id);
         if (ev.data.ok) w.resolve({ body: ev.data.body, sig: ev.data.sig });
-        else w.reject(new Error(ev.data.error));
+        else w.reject(ev.data.code ? wichtelError(ev.data.code, ev.data.error) : new Error(ev.data.error));
       };
       worker.onerror = () => {
         broken = true;
