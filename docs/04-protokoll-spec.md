@@ -131,9 +131,14 @@ pad(data) = u16(len(data)) ‖ data ‖ Z(k)   mit k minimal, sodass Gesamtläng
 
 | Datum | AAD | Inhalt | Limit |
 |---|---|---|---|
-| `enc_meta` | `"wichtel/v1/meta" ‖ gid` | UTF-8-JSON `{"title","budget","event_date","description"}` | `META_MAX` |
+| `enc_meta` | `"wichtel/v1/meta" ‖ Z(16)` ¹ | UTF-8-JSON `{"title","budget","event_date","description"}` | `META_MAX` |
 | `enc_name` | `"wichtel/v1/name" ‖ gid ‖ pid ‖ IPK ‖ IDH` | UTF-8 | `NAME_MAX` |
 | `enc_wish` | `"wichtel/v1/wish" ‖ gid ‖ pid ‖ IPK ‖ IDH` | UTF-8 (darf leer sein) | `WISH_MAX` |
+
+¹ Die `gid` vergibt der Server erst in der Antwort auf `POST /api/groups`, `enc_meta` steht aber
+schon im Request. Deshalb wird an Stelle der `gid` ein fester Nullwert `Z(16)` verwendet. Das
+schwächt nichts: `GK` ist pro Gruppe frisch und zufällig, ein vom Server untergeschobenes
+`enc_meta` einer anderen Gruppe ließe sich mit diesem `GK` nicht öffnen.
 
 Beim Öffnen MUSS `pad` geprüft werden (Länge ≤ Rest, Füllbytes = 0). Ein Eintrag, dessen Name
 sich nicht öffnen lässt, wird in der UI als „⚠ ungültiger Eintrag“ angezeigt; der Client DARF in
