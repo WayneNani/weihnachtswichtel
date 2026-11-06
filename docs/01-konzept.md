@@ -1,6 +1,6 @@
 # Weihnachtswichtel – Konzept
 
-Stand: 2026-11-06 · Status: Entwurf v4 (nach Review und Rückmeldungen: lokales Turso, kein Störerschutz, freie Auslosung mit verborgenen gegenseitigen Paaren – siehe `02-review.md` §G)
+Stand: 2026-11-06 · Status: Entwurf v5 (v4 + Verlosungstermin und optionale Web-Push-Benachrichtigungen; Entscheidungen siehe `02-review.md` §G)
 
 ## 1. Ziel
 
@@ -45,7 +45,7 @@ Daraus folgt: Hostet der Spielleiter den Server selbst, schützt das Protokoll *
 
 ## 4. Nutzerfluss
 
-1. **Runde anlegen** (Spielleiter): Titel, Budget, Datum, optional Hinweistext. Der Browser erzeugt
+1. **Runde anlegen** (Spielleiter): Titel, Budget, Wichteldatum, **Verlosungstermin** (optional), Hinweistext. Der Browser erzeugt
    einen Gruppenschlüssel `GK` und ein Admin-Geheimnis `AS`. Der Spielleiter erhält
    - einen **Einladungslink**: `https://host/g/<gid>#k=<GK>`
    - einen **Spielleiter-Link**: `https://host/g/<gid>#k=<GK>&a=<AS>` (privat aufbewahren)
@@ -56,8 +56,10 @@ Daraus folgt: Hostet der Spielleiter den Server selbst, schützt das Protokoll *
    entfernen (Dubletten, Spaßvögel).
 4. **Fingerabdruck vergleichen**: Jeder sieht einen Gruppen-Fingerabdruck (6 Wörter) und postet
    bzw. vergleicht ihn im Gruppenchat. Stimmt er bei allen überein, sehen alle dieselbe Liste.
-5. **Verlosung starten** (Spielleiter): Teilnehmerliste wird eingefroren. Ab jetzt läuft das
-   Protokoll in Runden (Abschnitt 6). Zwei Modi:
+   Optional: **Benachrichtigungen einschalten** (Web-Push, siehe 7.4).
+5. **Verlosung starten**: zum **Verlosungstermin** automatisch (siehe 6.6) oder vorher per Knopfdruck
+   des Spielleiters. Die Teilnehmerliste wird eingefroren. Ab jetzt läuft das Protokoll in Runden
+   (Abschnitt 6). Zwei Modi:
    - **Live-Modus**: Alle haben den Link gleichzeitig offen (Weihnachtsfeier, Videocall). Das
      Protokoll läuft automatisch in wenigen Sekunden durch.
    - **Asynchron-Modus**: Jeder öffnet seinen persönlichen Link irgendwann; jeder Besuch erledigt
@@ -214,7 +216,24 @@ jeder bis zu 4 Besuche; jeder Besuch erledigt automatisch alles Mögliche. In �
 (Kollision in Bereich E) kommt ein Durchgang hinzu. Fehlt jemand dauerhaft, entfernt ihn der
 Spielleiter (siehe 6.4).
 
-### 6.6 Was lernt wer?
+### 6.6 Verlosungstermin
+
+Der Spielleiter kann beim Anlegen (oder später, solange nicht gestartet) einen **Verlosungstermin**
+festlegen, z. B. „1.12., 20:00“. Damit treffen sich möglichst viele zur selben Zeit, und aus dem
+zähen Asynchron-Fall wird meist ein schneller Live-Fall.
+
+- Der Termin wird **im Klartext** auf dem Server gespeichert (`draw_at`, UTC), weil der Server ihn
+  auslösen muss. Er verrät nichts Persönliches. Titel und Beschreibung bleiben verschlüsselt.
+- Alle sehen einen **Countdown**. Wer die Seite zum Termin offen hat, ist im Live-Modus dabei;
+  Nachzügler erledigen ihre Schritte später automatisch.
+- Zum Termin friert der Server die Liste ein und startet Runde 1 (Hintergrund-Job, minütlich).
+  Bei weniger als 4 Teilnehmern startet er nicht, sondern markiert die Gruppe als „Termin
+  verpasst – zu wenige Teilnehmer“. Der Spielleiter kann dann einen neuen Termin setzen.
+- Der Spielleiter kann jederzeit vorher manuell starten oder den Termin ändern bzw. entfernen.
+- Mit Web-Push (7.4) erhalten alle, die es eingeschaltet haben, 10 Minuten vorher und zum Termin
+  eine Erinnerung.
+
+### 6.7 Was lernt wer?
 
 - **Server/Spielleiter** (passiv): Teilnehmerzahl, öffentliche Schlüssel, Zeitpunkte, Fortschritt,
   welcher Versuch gewählt wurde. Keine Zuordnung. Der Spielleiter kennt `GK` und damit die Namen –
@@ -262,7 +281,7 @@ VPS oder Container.
 | `wichtel-core` | reine Logik, kein I/O, `native` + `wasm32` | `x25519-dalek`, `ed25519-dalek`, `hpke`, `chacha20`, `chacha20poly1305`, `hkdf`, `sha2`, `zeroize`, `rand_core`, `serde` |
 | `wichtel-api` | gemeinsame DTOs (Request/Response-Typen) | `serde`, `base64` |
 | `wichtel-wasm` | JS-Bindings für `core` | `wasm-bindgen`, `getrandom` (Feature `js`/`wasm_js`) |
-| `wichtel-server` | HTTP-API, Persistenz, Ablauf | `axum`, `tokio`, `turso` (lokal, `default-features = false`), `tower-http`, `rust-embed`, `tracing` |
+| `wichtel-server` | HTTP-API, Persistenz, Ablauf | `axum`, `tokio`, `turso` (lokal, `default-features = false`), `tower-http`, `rust-embed`, `tracing`; für Web-Push: `p256` (VAPID-Signatur), `reqwest` (rustls) |
 
 Der Kern ist ohne Server testbar: Ein **Simulations-Test** spielt das ganze Protokoll mit n
 In-Process-Clients und einem In-Memory-„Briefkasten“ durch – inkl. Kollisionen, Austritten,
@@ -285,6 +304,10 @@ Server-Equivocation und einem statistischen Test auf Gleichverteilung der Zuordn
 | `POST /api/groups/{gid}/rounds/{r}/next` | Teilnehmer | „Kollision in Bereich E“ ⇒ Runde `r+1` (nur vor Freigabe der Enthüllungen; ohne Inhalt; Server prüft selbst nach) |
 | `POST /api/groups/{gid}/restart` | Admin | neue Verlosung (nach Austritt oder Fehler; sichtbar, gezählt) |
 | `GET /api/groups/{gid}/events` | – | SSE: Zustandsänderungen (für Live-Modus) |
+| `PUT /api/groups/{gid}/schedule` | Admin | Verlosungstermin setzen/ändern/entfernen (`draw_at` oder `null`) |
+| `GET /api/push/vapid-key` | – | öffentlicher VAPID-Schlüssel des Servers |
+| `PUT /api/groups/{gid}/participants/{pid}/push` | Teilnehmer | Push-Abo hinterlegen (Endpoint-URL + Schlüssel) |
+| `DELETE /api/groups/{gid}/participants/{pid}/push` | Teilnehmer | Push-Abo löschen |
 
 Auth per `Authorization: Bearer <token>`; Server vergleicht Hashes in konstanter Zeit.
 Hochgeladene Protokollnachrichten sind zusätzlich mit `isk` signiert.
@@ -293,9 +316,11 @@ Hochgeladene Protokollnachrichten sind zusätzlich mit `isk` signiert.
 
 ```sql
 groups(gid TEXT PK, admin_hash BLOB, enc_meta BLOB, state TEXT, round INT,
-       roster_hash BLOB, created_at INT, expires_at INT)
+       roster_hash BLOB, draw_at INT NULL, created_at INT, expires_at INT)
 participants(gid, pid, ipk BLOB, idh BLOB, auth_hash BLOB, enc_name BLOB,
              enc_wish BLOB, joined_at INT, PRIMARY KEY(gid, pid))
+push_subscriptions(gid, pid, endpoint TEXT, p256dh BLOB, auth BLOB, created_at INT,
+                   PRIMARY KEY(gid, pid))   -- nur bei Opt-in; mit der Gruppe gelöscht
 dcnet_rounds(gid, round, aggregate BLOB, submitted TEXT)  -- laufendes XOR + wer schon hochgeladen hat
 selfdraw_rounds(gid, round, aggregate BLOB, submitted TEXT)
 reveal_uploads(gid, round, pid, attempt INT, ciphertext BLOB) -- nach Bestimmung von t* nur t* behalten
@@ -309,7 +334,43 @@ Gelöschte Daten (verworfene Enthüllungen, abgelaufene Gruppen) dürfen nicht i
 WAL-Checkpoint. **In Phase 0 prüfen, ob Turso das unterstützt**; sonst nach Löschungen periodisch
 `VACUUM`.
 
-### 7.4 Datensparsamkeit
+### 7.4 Benachrichtigungen (Web-Push, optional)
+
+Damit niemand ständig nachsehen muss, ob er wieder dran ist, kann jeder Teilnehmer im Browser
+**Benachrichtigungen einschalten**. Standard ist **aus**.
+
+**Ablauf:**
+1. Teilnehmer tippt „Benachrichtigen, wenn ich dran bin“. Der Browser fragt nach der Erlaubnis.
+2. Ein Service Worker registriert sich beim **Push-Dienst des Browserherstellers** (Google FCM,
+   Mozilla Autopush, Apple). Der liefert eine Endpoint-URL. Diese URL plus Schlüssel speichert der
+   Server zum Teilnehmer.
+3. Ändert sich der Zustand der Gruppe so, dass Teilnehmer etwas tun können (Termin naht, Verlosung
+   gestartet, nächster Schritt möglich, Ergebnis da, Neuverlosung), schickt der Server an
+   **alle** Abonnenten der Gruppe gleichzeitig einen Push. Es gibt keine personenbezogenen Auslöser,
+   deshalb verrät das Muster nichts.
+
+**Datensparsam umgesetzt:**
+- **Push ohne Inhalt**: Der Server sendet eine leere Nachricht, nur mit VAPID-Signatur (ES256,
+  Crate `p256`) und kurzer `TTL`. Der Push-Dienst sieht also nur: „dieser Server weckt diesen
+  Browser“ – keinen Gruppennamen, keinen Text. Der Service Worker zeigt einen festen Text
+  („🎁 Wichteln: Es gibt Neuigkeiten in deiner Runde“). Beim Antippen öffnet er den persönlichen
+  Link aus dem lokalen Speicher (IndexedDB).
+- Abo nur nach ausdrücklichem Opt-in, jederzeit abschaltbar, wird mit der Gruppe gelöscht.
+  Antwortet der Push-Dienst mit 404/410, wird das Abo sofort gelöscht.
+- Kein Nachrichtenzähler, keine Lesebestätigungen.
+- Ausgehende Push-Anfragen laufen über einen eigenen kleinen HTTP-Client mit Zeitlimit und
+  Warteschlange. Fällt ein Push aus, passiert nichts weiter, der Abruf über die Seite funktioniert
+  immer.
+
+**Einschränkungen (in der UI erklärt):**
+- Der Push-Dienst ist ein Dritter (Google/Apple/Mozilla). Er sieht die IP des Servers, den
+  Zeitpunkt und die pseudonyme Endpoint-URL des Browsers. Deshalb nur nach Opt-in.
+- **iOS/iPadOS** stellt Web-Push nur für Web-Apps zu, die auf den Home-Bildschirm gelegt wurden
+  („Zum Home-Bildschirm“). Dafür braucht es ein Web-App-Manifest, das wir mitliefern. Eine
+  Installation aus einem App-Store ist das nicht, aber ein zusätzlicher Schritt. Ohne ihn
+  funktioniert alles wie bisher, nur ohne Benachrichtigung.
+
+### 7.5 Datensparsamkeit
 
 - Keine Konten, keine E-Mail-Adressen, keine Cookies (nur `localStorage` für den eigenen `seed`,
   technisch notwendig ⇒ kein Consent-Banner nötig).
@@ -319,6 +380,7 @@ WAL-Checkpoint. **In Phase 0 prüfen, ob Turso das unterstützt**; sonst nach L�
 - Automatische Löschung nach Ablauf; einzelne DC-Vektoren werden nie gespeichert (laufendes XOR),
   Enthüllungen nicht gewählter Versuche sofort gelöscht.
 - Rate-Limits und Größenlimits gegen Missbrauch als anonymer Speicher.
+- Web-Push nur nach Opt-in, ohne Inhalt, Abos werden mit der Gruppe gelöscht (7.4).
 
 ## 8. Datenbank: Turso, lokal eingebettet
 

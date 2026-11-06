@@ -1,6 +1,6 @@
 # Weihnachtswichtel – Umsetzungsplan mit parallelen Subagents
 
-Stand: 2026-11-06 · Grundlage: `01-konzept.md` v4 inkl. der Entscheidungen aus `02-review.md` §G
+Stand: 2026-11-06 · Grundlage: `01-konzept.md` v5 inkl. der Entscheidungen aus `02-review.md` §G
 
 ## 1. Leitplanken für die Maschinenlast
 
@@ -117,6 +117,11 @@ Phase 4                                                                   └─
   (`secure_delete` bzw. `VACUUM`); Folgerunde bei Kollision nur vor Freigabe der Enthüllungen;
   Neuverlosung nur durch Admin (nach Austritt/Fehler), Zähler öffentlich.
 - SSE-Endpunkt, Größen- und Rate-Limits, Ablauf-/Lösch-Job.
+- **Verlosungstermin**: `draw_at`, minütlicher Job startet fällige Runden (n < 4 ⇒ „Termin verpasst“).
+- **Web-Push**: VAPID-Schlüsselpaar (beim ersten Start erzeugt, in DB/Datei), Abo-Endpunkte,
+  inhaltsloser Push mit ES256-JWT (`p256`) über `reqwest`/rustls, Fan-out an alle Abonnenten der
+  Gruppe bei Zustandswechsel und 10 min vor dem Termin, 404/410 ⇒ Abo löschen. Tests gegen einen
+  lokalen Mock-Push-Dienst.
 - Logging ohne IPs; Security-Header (CSP, Referrer-Policy, …); Auslieferung von `web/dist` via rust-embed.
 - Integrationstests mit `tower::ServiceExt::oneshot` + temporärer SQLite-Datei.
 
@@ -126,6 +131,9 @@ Phase 4                                                                   └─
 - Gegen ein **Mock-Interface** der WASM-Funktionen (TypeScript-Interface aus Phase 0) und einen
   Mock-Server (JSON-Fixtures) – damit unabhängig von A1/A2.
 - Fragment-Parsing, `localStorage` mit try/catch, keine externen Ressourcen, mobile-first.
+- Countdown zum Verlosungstermin, Termin setzen/ändern (Spielleiter).
+- Service Worker (Push-Empfang mit festem Text, Klick öffnet persönlichen Link aus IndexedDB),
+  Web-App-Manifest, Opt-in-Dialog inkl. iOS-Hinweis „Zum Home-Bildschirm“.
 
 *Merge-Reihenfolge:* A1 → A2 (ersetzt Stub durch echte Verify-Funktion) → A3.
 Jeder Agent rebased vor dem Merge auf den aktuellen Hauptzweig und lässt `cargo test -p <eigenes Crate>` laufen.

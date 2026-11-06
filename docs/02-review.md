@@ -225,3 +225,23 @@ Austritt nach der Verlosung ⇒ **komplette Neuverlosung** für alle, mit Warnun
 gegenseitigem Beschenken nicht immer möglich: Waren X und Y ein Paar, würde Y sich selbst ziehen.
 Deshalb ist die Neuverlosung die einfache und immer korrekte Lösung.
 
+### G5 Verlosungstermin und Web-Push (aus C2)
+Der **Verlosungstermin** (Konzept 6.6) entschärft das größte UX-Problem, das Warten auf den
+Langsamsten (B4, C2), ohne zusätzliche Daten: Der Termin selbst ist unkritisch und liegt im
+Klartext auf dem Server.
+
+**Web-Push** (Konzept 7.4) wird entgegen der ursprünglichen Entscheidung in C2 aufgenommen, aber
+nur abgesichert:
+- nur nach Opt-in,
+- Push **ohne Inhalt**, damit der Push-Dienst keinen Text sieht,
+- Pushes immer an alle Abonnenten einer Gruppe gleichzeitig, damit das Muster nichts verrät,
+- Abos werden mit der Gruppe gelöscht, ungültige sofort.
+
+Restrisiken:
+- Der Push-Dienst des Browserherstellers ist ein **Dritter**: Er sieht Server-IP, Zeitpunkt und
+  den pseudonymen Endpoint. Das muss in der Datenschutzerklärung stehen.
+- Auf **iOS** funktioniert Push nur, wenn die Seite zum Home-Bildschirm hinzugefügt wurde. Die UI
+  erklärt das, die App funktioniert auch ohne.
+- Der Server braucht ausgehende HTTPS-Verbindungen. In Tests wird der Push-Dienst durch einen
+  lokalen Mock ersetzt.
+
