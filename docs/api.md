@@ -85,8 +85,7 @@ Content-Type: application/json
       "ipk": "…32 B…",
       "idh": "…32 B…",
       "enc_name": "…",
-      "enc_wish": "…",
-      "joined_at": 1762459300
+      "enc_wish": "…"
     }
   ],
   "progress": {
@@ -98,6 +97,9 @@ Content-Type: application/json
 ```
 
 Weitere Zustände: `{"state": "open", …}`, `{"state": "done", "round": 2, "t_star": 3, …}`.
+
+Teilnehmer tragen bewusst keinen Beitrittszeitpunkt: Er würde die Beitrittsreihenfolge hinter
+der nach `pid` sortierten Liste verraten.
 
 ### Beitreten
 
@@ -185,8 +187,16 @@ Der Server sendet Pushes **ohne Inhalt** (leerer Body, `TTL: 3600`, VAPID-JWT ES
 | `enc_wish` | ≤ 1100 B |
 | Rollen-Vektor | genau `2688·n²` B (≤ 2,42 MB) |
 | Schritt-2-Upload | genau 9216 B |
-| Gruppen-Erstellung | Rate-Limit pro IP (nur im RAM), z. B. 10/h |
-| Push-Endpoint | HTTPS-URL, ≤ 1024 Zeichen |
+| Uploads (Rollen, Schritt 2) | Token, Zustand, Runde und `Content-Length` werden **vor** dem Lesen des Bodys geprüft (`401`/`409`/`413`/`400`); höchstens die erwartete Länge wird gelesen |
+| Gruppen-Erstellung | Rate-Limit pro IPv4-Adresse bzw. IPv6-/48 (nur im RAM), 10/h; zusätzlich global 500/h |
+| Beitritte | 120/h pro IP (IPv6: /64) |
+| `GET …/roles`, `GET …/reveal` | 300/h pro IP (IPv6: /64) |
+| SSE-Verbindungen | 100 pro Gruppe, 40 pro IP (IPv6: /64), 2000 insgesamt (`429`) |
+| Gleichzeitige Anfragen | 256; darüber `503` mit `Retry-After: 5` |
+| Zeitlimits | 120 s pro Anfrage (`408`), 30 s Pause im Request-Body (`400`) |
+| Leere Gruppen | ohne Teilnehmer nach 24 h ohne Aktivität gelöscht; mit < 4 Teilnehmern und ohne Termin nach 7 Tagen |
+| Push | höchstens ein Push pro Gruppe und Minute; Änderungen dazwischen werden zu einem Push zusammengefasst |
+| Push-Endpoint | HTTPS-URL, ≤ 1024 Zeichen, Host aus `WICHTEL_PUSH_HOSTS` (keine Platzhalter) |
 
 ## Abweichung vom Konzept §7.2
 

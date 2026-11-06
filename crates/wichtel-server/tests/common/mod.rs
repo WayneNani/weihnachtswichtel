@@ -267,6 +267,8 @@ pub fn remove_db(path: &str) {
 pub fn test_config() -> Config {
     Config {
         push_hosts: vec!["push.example.org".into()],
+        // Push throttling has its own test; elsewhere every fan-out goes out at once.
+        push_min_interval: Duration::ZERO,
         ..Config::default()
     }
 }

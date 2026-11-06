@@ -9,6 +9,28 @@ use wichtel_server::push::ReqwestPushClient;
 use wichtel_server::store::TursoStore;
 use wichtel_server::{App, Config, routes, spawn_jobs};
 
+/// Resolves on Ctrl-C (SIGINT) or SIGTERM (`docker stop`, systemd).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {},
+        () = term => {},
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Logs carry neither IPs nor user agents nor path parameters (Konzept §7.5).
@@ -39,19 +61,26 @@ async fn main() {
     )
     .await
     .expect("initialize application");
-    spawn_jobs(app.clone());
+    let jobs = spawn_jobs(app.clone());
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("bind listen address");
     tracing::info!(%addr, "listening");
+    let app2 = app.clone();
     axum::serve(
         listener,
-        routes::router(app).into_make_service_with_connect_info::<SocketAddr>(),
+        routes::router(app.clone()).into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(async {
-        let _ = tokio::signal::ctrl_c().await;
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        tracing::info!("shutting down");
+        // SSE streams never end on their own; close them so the graceful shutdown completes.
+        app2.shutdown();
     })
     .await
     .expect("server error");
+    jobs.abort();
+    // Do not leave deleted data in free pages until the next start.
+    app.maybe_vacuum(true).await;
 }

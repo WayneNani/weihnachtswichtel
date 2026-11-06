@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use axum::body::Body;
-use axum::extract::{MatchedPath, Request};
+use axum::extract::{MatchedPath, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -19,12 +19,22 @@ pub const CSP: &str = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval';
 const PERMISSIONS_POLICY: &str = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), \
     magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()";
 
-/// Adds security headers to every response; API responses additionally get
-/// `Cache-Control: no-store`.
-pub async fn security_headers(req: Request, next: Next) -> Response {
+/// `Strict-Transport-Security` for deployments whose public URL is HTTPS (one year; no
+/// `includeSubDomains`, other services of the operator may live on subdomains).
+pub const HSTS: &str = "max-age=31536000";
+
+/// Adds security headers to every response (`hsts`: public URL is HTTPS); API responses
+/// additionally get `Cache-Control: no-store`.
+pub async fn security_headers(State(hsts): State<bool>, req: Request, next: Next) -> Response {
     let is_api = req.uri().path().starts_with("/api/");
     let mut res = next.run(req).await;
     let h = res.headers_mut();
+    if hsts {
+        h.insert(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static(HSTS),
+        );
+    }
     h.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(CSP),
