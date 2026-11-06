@@ -23,7 +23,7 @@ function view(partial: Partial<GroupView> & Pick<GroupView, "state">): GroupView
     schedule_missed: false,
     delete_after: 0,
     created_at: 0,
-    participants: ["A", "B", "C", "D"].map((pid) => ({ pid, ipk: "", idh: "", enc_name: "", enc_wish: "", joined_at: 0 })),
+    participants: ["A", "B", "C", "D"].map((pid) => ({ pid, ipk: "", idh: "", enc_name: "", enc_wish: "" })),
     progress: null,
     ...partial,
   } as GroupView;

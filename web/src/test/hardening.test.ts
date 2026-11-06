@@ -127,7 +127,6 @@ test("decodeRoster cleans names and marks duplicates", () => {
       idh: b64uEncode(keys.idh),
       enc_name: b64uEncode(encName),
       enc_wish: b64uEncode(encWish),
-      joined_at: i,
     };
   };
   const names = ["Anna", "‮anna", "Bernd", "​‌", "Carla"];

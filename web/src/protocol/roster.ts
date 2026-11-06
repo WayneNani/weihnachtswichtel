@@ -10,7 +10,6 @@ export interface Member {
   name: string | null;
   /** null ⇒ wish not readable; "" ⇒ no wish. */
   wish: string | null;
-  joinedAt: number;
   valid: boolean;
   /** Another entry has the same name (after NFKC + case folding) – shown as "⚠ Name doppelt". */
   duplicate: boolean;
@@ -78,7 +77,7 @@ export function decodeRoster(wasm: WichtelWasm, gk: Uint8Array, gid: Uint8Array,
     const valid = name !== null && pid !== null && ipk !== null && idh !== null && encName !== null;
     decoded.push({
       pid: pid ?? new Uint8Array(16),
-      m: { pidB64: p.pid, name, wish, joinedAt: p.joined_at, valid, duplicate: false },
+      m: { pidB64: p.pid, name, wish, valid, duplicate: false },
       e: valid ? { pid: pid!, ipk: ipk!, idh: idh!, encName: encName! } : null,
     });
   }

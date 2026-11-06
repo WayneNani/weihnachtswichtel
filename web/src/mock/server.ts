@@ -359,7 +359,6 @@ export class MockServer {
       idh: b64uEncode(p.idh),
       enc_name: p.encName,
       enc_wish: p.encWish,
-      joined_at: p.joinedAt,
     }));
     const common = {
       gid: g.gidB64,

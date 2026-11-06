@@ -17,7 +17,6 @@ export interface ParticipantView {
   idh: B64;
   enc_name: B64;
   enc_wish: B64;
-  joined_at: number;
 }
 
 export interface Progress {

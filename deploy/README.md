@@ -30,7 +30,7 @@ Caddy läuft dann auf dem Host mit `deploy/Caddyfile` (Domain und E-Mail ersetze
 `127.0.0.1:8080` an. Läuft Caddy selbst im Container, beide in ein gemeinsames Docker-Netz legen,
 den Port **nicht** veröffentlichen und im Caddyfile `reverse_proxy wichtel:8080` eintragen.
 
-Das Image setzt `STOPSIGNAL SIGINT` (der Server fährt auf Ctrl-C/SIGINT geordnet herunter) und hat
+Das Image setzt `STOPSIGNAL SIGINT` (der Server fährt auf SIGINT und SIGTERM geordnet herunter) und hat
 einen Healthcheck auf `GET /api/health` (Antwort `ok`), der ohne zusätzliche Werkzeuge auskommt.
 
 Ohne Docker: `scripts/build-all.sh --release`, das Binary aus `$CARGO_TARGET_DIR/release/` kopieren
@@ -47,10 +47,10 @@ Aus `crates/wichtel-server/src/config.rs`:
 | `WICHTEL_PORT` | – | – | überschreibt nur den Port von `WICHTEL_ADDR` |
 | `WICHTEL_DB` | `wichtel.db` | `/data/wichtel.db` | Datenbankdatei (daneben `-wal`) |
 | `WICHTEL_PUBLIC_URL` | `http://127.0.0.1:8080` | – | öffentliche Basis-URL; Fallback für den VAPID-Subject. **Setzen.** |
-| `WICHTEL_VAPID_SUBJECT` | = `WICHTEL_PUBLIC_URL` | – | VAPID-`sub` (`mailto:…` oder `https://…`); Kontakt für die Push-Dienste |
+| `WICHTEL_VAPID_SUBJECT` | = `WICHTEL_PUBLIC_URL` | – | VAPID-`sub` (`mailto:…` oder `https://…`); Kontakt für die Push-Dienste. Ungültiger Wert (z. B. `http://127.0.0.1…`) bei aktivem Push ⇒ Startfehler |
 | `WICHTEL_TRUST_PROXY` | `false` | – | `1`/`true`/`yes`/`on`: Client-IP für Rate-Limits aus dem **letzten** `X-Forwarded-For`-Eintrag |
 | `WICHTEL_MAX_GROUPS` | `10000` | – | globale Obergrenze gespeicherter Runden |
-| `WICHTEL_PUSH_HOSTS` | `fcm.googleapis.com, push.services.mozilla.com, push.apple.com, notify.windows.com` | – | erlaubte Push-Dienste (Host-Suffixe, kommagetrennt); `*` = jeder öffentliche Host |
+| `WICHTEL_PUSH_HOSTS` | `fcm.googleapis.com, push.services.mozilla.com, push.apple.com, notify.windows.com` | – | erlaubte Push-Dienste (Host-Suffixe, kommagetrennt); `*` ist **nicht** erlaubt (Startfehler, Schutz vor SSRF) |
 | `RUST_LOG` | `info,turso=warn,turso_core=warn` | ebenso | Log-Level (`tracing`-Filter) |
 
 Fest eingebaut (nicht konfigurierbar): 10 neue Runden und 120 Beitritte pro IP und Stunde
