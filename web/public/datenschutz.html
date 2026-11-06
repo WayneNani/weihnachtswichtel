@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Datenschutz – Wichteln</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <!--
+      VORLAGE. Vor dem öffentlichen Betrieb ausfüllen: alle Platzhalter in [eckigen Klammern]
+      ersetzen, die Abschnitte "Hosting" und "Backups" an den tatsächlichen Betrieb anpassen und den
+      gelben Vorlagen-Hinweis entfernen. Die Fristen und Datenkategorien entsprechen dem Code
+      (crates/wichtel-server, web/src); bei Änderungen am Code mitziehen. Keine Rechtsberatung.
+    -->
+    <a class="skip-link" href="#main">Zum Inhalt springen</a>
+    <div id="app" class="legal">
+      <header class="topbar">
+        <a href="/" class="brand"><span aria-hidden="true">🎁</span> Wichteln</a>
+      </header>
+      <main id="main">
+        <section class="card">
+          <h1>Datenschutzerklärung</h1>
+
+          <div class="notice notice-warn">
+            <strong class="notice-title">Vorlage – vom Betreiber auszufüllen</strong>
+            <p>
+              Diese Seite ist eine Vorlage. Platzhalter in [eckigen Klammern] sind durch die tatsächlichen Angaben zu
+              ersetzen. Sie ist keine Rechtsberatung; der Betreiber ist für die Richtigkeit selbst verantwortlich.
+            </p>
+          </div>
+
+          <h2>Das Wichtigste in Kürze</h2>
+          <ul>
+            <li>Keine Konten, keine E-Mail-Adressen, keine Cookies, kein Tracking, keine Analyse-Dienste.</li>
+            <li>
+              Titel, Namen, Wunschzettel und Hinweise werden <strong>in deinem Browser verschlüsselt</strong>. Der Schlüssel
+              steht nur im Link hinter dem <code>#</code> und wird nie an den Server geschickt. Der Server kann diese Inhalte
+              nicht lesen.
+            </li>
+            <li>Wer wen beschenkt, wird in den Browsern der Teilnehmer ausgelost. Der Server erfährt es nicht.</li>
+            <li>IP-Adressen werden nicht protokolliert und nicht gespeichert.</li>
+            <li>Runden werden automatisch gelöscht, spätestens 60 Tage nach dem Anlegen.</li>
+          </ul>
+
+          <h2>1. Verantwortlicher</h2>
+          <p>
+            [Name]<br />
+            [Anschrift]<br />
+            E-Mail: [E-Mail-Adresse]
+          </p>
+          <p class="hint">[Falls vorhanden: Kontakt des Datenschutzbeauftragten]</p>
+
+          <h2>2. Aufruf der Website</h2>
+          <p>
+            Beim Aufruf überträgt dein Browser technisch bedingt deine IP-Adresse. Der Server verwendet sie ausschließlich
+            im Arbeitsspeicher, um zu zählen, wie oft von einer Adresse aus Runden angelegt oder betreten werden
+            (Missbrauchsschutz). Diese Zähler werden nicht auf Datenträger geschrieben und nach spätestens einer Stunde
+            verworfen.
+          </p>
+          <p>
+            Der Server führt ein technisches Protokoll ohne IP-Adresse, ohne Browserkennung (User-Agent) und ohne
+            Rundenkennung: Zeitpunkt, Art der Anfrage, Statuscode, Dauer und ein gekürzter Prüfwert der Rundenkennung, der
+            nur zum Zuordnen zusammengehöriger Anfragen dient. Der vorgeschaltete Webserver schreibt keine Zugriffsprotokolle.
+          </p>
+          <p>Rechtsgrundlage: Art. 6 Abs. 1 lit. f DSGVO (berechtigtes Interesse am sicheren, missbrauchsfreien Betrieb).</p>
+
+          <h2>3. Daten einer Wichtelrunde</h2>
+          <p>Wenn du eine Runde anlegst oder ihr beitrittst, speichert der Server:</p>
+          <h3>Verschlüsselt (für den Betreiber nicht lesbar)</h3>
+          <ul>
+            <li>Titel, Budget, Wichteldatum und Beschreibung der Runde,</li>
+            <li>Namen und Wunschzettel der Teilnehmer,</li>
+            <li>persönliche Hinweise an den eigenen Schenker,</li>
+            <li>
+              die Daten der Verlosung (verschlüsselte bzw. zusammengefasste Zwischenergebnisse, aus denen sich die Zuordnung
+              nicht ablesen lässt).
+            </li>
+          </ul>
+          <h3>Unverschlüsselt (für den Betreiber lesbar)</h3>
+          <ul>
+            <li>eine zufällige Kennung der Runde und je Teilnehmer eine zufällige Teilnehmerkennung,</li>
+            <li>
+              öffentliche Schlüssel und Prüfwerte (Hashes) der Zugangsgeheimnisse – zufällig im Browser erzeugt, ohne Bezug
+              zu Name, Gerät oder Konto,
+            </li>
+            <li>Zeitpunkte: Anlegen der Runde, Beitritt, letzte Aktivität,</li>
+            <li>der Verlosungstermin, falls einer gesetzt wurde (der Server startet die Verlosung zu diesem Zeitpunkt),</li>
+            <li>
+              der Löschzeitpunkt der Runde (er wird aus dem Wichteldatum abgeleitet und lässt dieses daher ungefähr
+              erkennen),
+            </li>
+            <li>der Stand der Runde: offen, Verlosung läuft, fertig; Zahl der Teilnehmer und der Verlosungen.</li>
+          </ul>
+          <p>
+            Zweck: Durchführung der Wichtelrunde, die du selbst anlegst oder der du beitrittst. Rechtsgrundlage: Art. 6
+            Abs. 1 lit. b DSGVO (Nutzung des Dienstes auf deinen Wunsch). [Vom Betreiber zu prüfen; bei rein privatem,
+            unentgeltlichem Angebot ggf. Art. 6 Abs. 1 lit. f DSGVO.]
+          </p>
+
+          <h2>4. Benachrichtigungen (nur mit deiner Zustimmung)</h2>
+          <p>
+            Benachrichtigungen sind ausgeschaltet, bis du sie in einer Runde ausdrücklich einschaltest. Dann speichert der
+            Server ein <strong>Push-Abonnement</strong>: eine vom Push-Dienst deines Browsers vergebene Adresse
+            (Endpoint-URL) und zwei Schlüssel. Ändert sich in der Runde etwas, schickt der Server an alle Abonnenten der
+            Runde gleichzeitig eine <strong>leere</strong> Nachricht; der angezeigte Text steht fest in der App.
+          </p>
+          <p>
+            <strong>Empfänger:</strong> Die Nachricht wird über den Push-Dienst des Herstellers deines Browsers
+            zugestellt, z. B. Google (Firebase Cloud Messaging; Chrome, Android), Mozilla (Firefox), Apple (Safari, iOS)
+            oder Microsoft (Edge). Der Push-Dienst erfährt die IP-Adresse unseres Servers, den Zeitpunkt und die pseudonyme
+            Endpoint-URL deines Browsers, aber keinen Inhalt. Diese Anbieter können Daten auch außerhalb der EU verarbeiten.
+            [Hinweis zur Drittlandübermittlung ergänzen, z. B. EU-US Data Privacy Framework.]
+          </p>
+          <p>
+            Rechtsgrundlage: Einwilligung, Art. 6 Abs. 1 lit. a DSGVO. Du kannst sie jederzeit widerrufen, indem du die
+            Benachrichtigungen in der Runde ausschaltest oder die Berechtigung in den Browser-Einstellungen entziehst. Das
+            Abonnement wird gelöscht, wenn du es ausschaltest, die Runde verlässt, die Runde gelöscht wird oder der
+            Push-Dienst meldet, dass es nicht mehr gültig ist.
+          </p>
+
+          <h2>5. Speicherung in deinem Browser</h2>
+          <p>
+            Die App speichert im lokalen Speicher deines Browsers (<code>localStorage</code> und <code>IndexedDB</code>):
+            den Schlüssel der Runde, dein persönliches Geheimnis, deine Teilnehmerkennung, den Titel der Runde für die
+            Liste „Deine Runden“, deine Notiz für den Schenker, deine Einstellung zu Benachrichtigungen und deinen
+            persönlichen Link (damit eine Benachrichtigung die richtige Runde öffnet). Diese Daten verlassen dein Gerät
+            nicht; Notiz und Name werden nur verschlüsselt übertragen.
+          </p>
+          <p>
+            Die Speicherung ist für den von dir gewünschten Dienst unbedingt erforderlich (§ 25 Abs. 2 Nr. 2 TDDDG); eine
+            Einwilligung ist dafür nicht nötig. Es werden <strong>keine Cookies</strong> gesetzt. Du kannst die Daten
+            jederzeit über die Browser-Einstellungen („Website-Daten löschen“) entfernen; dein Ergebnis siehst du dann
+            weiterhin über deinen persönlichen Link.
+          </p>
+
+          <h2>6. Speicherdauer und Löschung</h2>
+          <ul>
+            <li>
+              Jede Runde wird automatisch gelöscht, wenn ihr Löschzeitpunkt erreicht ist: 14 Tage nach dem Wichteldatum,
+              höchstens aber 60 Tage nach dem Anlegen.
+            </li>
+            <li>
+              Runden, die ohne Verlosungstermin offen bleiben und weniger als 4 Teilnehmer haben, werden nach 7 Tagen ohne
+              Aktivität gelöscht.
+            </li>
+            <li>Der Spielleiter kann die Runde jederzeit sofort löschen.</li>
+            <li>
+              Wer austritt oder entfernt wird, dessen Teilnehmerdaten (inkl. Push-Abonnement) werden gelöscht.
+            </li>
+            <li>
+              Zwischenstände der Verlosung, die nicht mehr gebraucht werden, löscht der Server sofort. Nach Löschungen wird
+              die Datenbank innerhalb weniger Minuten bereinigt, damit gelöschte Inhalte nicht in freien Bereichen der
+              Datei verbleiben.
+            </li>
+            <li>[Backups: „Es werden keine Backups angelegt.“ ODER „Backups werden nach [Anzahl] Tagen gelöscht.“]</li>
+          </ul>
+
+          <h2>7. Hosting und weitere Empfänger</h2>
+          <p>
+            Der Dienst läuft auf einem Server von [Name und Anschrift des Hosters / „eigener Server“], [Standort, z. B.
+            Deutschland]. [Mit dem Hoster besteht ein Vertrag zur Auftragsverarbeitung nach Art. 28 DSGVO.] Die Datenbank
+            liegt auf diesem Server; es werden keine Cloud-Datenbanken, keine externen Schriftarten, keine CDNs und keine
+            Analyse-Dienste eingebunden. Weitere Empfänger gibt es nicht, außer den Push-Diensten bei eingeschalteten
+            Benachrichtigungen (Abschnitt 4).
+          </p>
+
+          <h2>8. Deine Rechte</h2>
+          <p>
+            Du hast das Recht auf Auskunft (Art. 15 DSGVO), Berichtigung (Art. 16), Löschung (Art. 17), Einschränkung der
+            Verarbeitung (Art. 18), Datenübertragbarkeit (Art. 20) und Widerspruch (Art. 21) sowie auf Widerruf einer
+            Einwilligung mit Wirkung für die Zukunft (Art. 7 Abs. 3). Du kannst dich bei einer
+            Datenschutz-Aufsichtsbehörde beschweren (Art. 77), z. B. bei [zuständige Aufsichtsbehörde].
+          </p>
+          <p>
+            Der Betreiber kennt keine Namen und kann gespeicherte Daten in der Regel keiner Person zuordnen (Art. 11
+            DSGVO). Am schnellsten löschst du deine Daten selbst: aus der Runde austreten, Benachrichtigungen ausschalten
+            oder – als Spielleiter – die Runde löschen. Schicke dem Betreiber bitte nie deinen persönlichen Link; er
+            enthält deine geheimen Schlüssel.
+          </p>
+
+          <p class="hint">Stand: [Datum]</p>
+        </section>
+      </main>
+      <footer class="footer">
+        <p class="footer-links"><a href="/">Startseite</a> · <a href="/impressum.html">Impressum</a></p>
+      </footer>
+    </div>
+  </body>
+</html>

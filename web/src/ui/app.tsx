@@ -91,6 +91,9 @@ export function App({ services }: { services: Services }) {
         <p>
           Ohne Konto, ohne Tracking. Wer wen beschenkt, wird in euren Browsern ausgelost – der Server erfährt es nicht.
         </p>
+        <p class="footer-links">
+          <a href="/impressum.html">Impressum</a> · <a href="/datenschutz.html">Datenschutz</a>
+        </p>
       </footer>
     </ServicesContext.Provider>
   );

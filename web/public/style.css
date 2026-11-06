@@ -152,6 +152,24 @@ a:hover {
   text-align: center;
   padding: 16px 8px;
 }
+.footer-links a {
+  color: var(--muted);
+}
+
+/* Static pages (impressum.html, datenschutz.html) */
+.legal ul {
+  padding-left: 1.2em;
+  margin: 0 0 0.75em;
+}
+.legal li {
+  margin-bottom: 0.35em;
+}
+.legal h2 {
+  margin-top: 1.25em;
+}
+.legal code {
+  overflow-wrap: anywhere;
+}
 
 .card {
   background: var(--card);
