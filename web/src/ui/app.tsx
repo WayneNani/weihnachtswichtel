@@ -71,7 +71,11 @@ export function App({ services }: { services: Services }) {
         >
           <span aria-hidden="true">🎁</span> Wichteln
         </a>
-        {__MOCK__ && <span class="mock-badge" title="Mock-Modus: keine echte Kryptographie">Mock</span>}
+        <div class="topbar-right">
+          {__MOCK__ && <span class="mock-badge" title="Mock-Modus: keine echte Kryptographie">Mock</span>}
+          {/* Filled by pages via TopbarSlot (e.g. the notification bell of a group). */}
+          <div id="topbar-actions" class="topbar-actions" />
+        </div>
       </header>
       <main id="main">
         {route.page === "home" && <HomePage />}

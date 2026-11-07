@@ -68,6 +68,11 @@ test("Szenario 6: Kernseiten auf 390×844 ohne horizontales Scrollen", async () 
     await noOverflow(admin, "Gruppenseite Spielleiter (Beitritt)");
     await join(admin, { name: LONG, wish: LONG_WISH });
     await noOverflow(admin, "Gruppenseite nach Beitritt");
+    // Notification bell (top right) with its panel open.
+    await admin.page.getByTestId("push-bell").click();
+    await admin.page.getByRole("dialog", { name: "Benachrichtigungen" }).waitFor();
+    await noOverflow(admin, "Benachrichtigungs-Panel");
+    await admin.page.getByRole("button", { name: "Schließen" }).click();
 
     const others = [];
     for (const name of ["Ole", "Pia", "Rudi"]) {

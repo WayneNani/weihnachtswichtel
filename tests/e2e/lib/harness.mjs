@@ -162,6 +162,16 @@ export class Device {
       permissions: ["clipboard-read", "clipboard-write"],
     });
     context.setDefaultTimeout(20_000);
+    // Headless Chromium reports Notification.permission = "denied" (even with the permission
+    // granted); real browsers start at "default", where the bell invites to opt in. Push itself
+    // is never subscribed in these tests.
+    await context.addInitScript(() => {
+      try {
+        Object.defineProperty(Notification, "permission", { get: () => "default", configurable: true });
+      } catch {
+        /* no Notification API */
+      }
+    });
     const page = await context.newPage();
     const dev = new Device(context, page, label);
     const record = (req) => {

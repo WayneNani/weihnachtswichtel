@@ -340,7 +340,10 @@ Damit niemand ständig nachsehen muss, ob er wieder dran ist, kann jeder Teilneh
 **Benachrichtigungen einschalten**. Standard ist **aus**.
 
 **Ablauf:**
-1. Teilnehmer tippt „Benachrichtigen, wenn ich dran bin“. Der Browser fragt nach der Erlaubnis.
+1. Teilnehmer tippt auf die **Glocke oben rechts** in der Kopfzeile der Runde. Bis sie einmal
+   geöffnet wurde, zeigt sie „Benachrichtigen?“ mit einem Hinweispunkt, damit niemand die Einstellung
+   erst unten suchen muss. Nach „Ja, benachrichtigen“ und einer kurzen Erklärung fragt der Browser
+   nach der Erlaubnis.
 2. Ein Service Worker registriert sich beim **Push-Dienst des Browserherstellers** (Google FCM,
    Mozilla Autopush, Apple). Der liefert eine Endpoint-URL. Diese URL plus Schlüssel speichert der
    Server zum Teilnehmer.

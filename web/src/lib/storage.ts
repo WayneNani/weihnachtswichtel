@@ -24,6 +24,8 @@ export interface LocalGroup {
   note?: string;
   /** Push opt-in for this group. */
   push?: boolean;
+  /** The notification bell was opened at least once (hides its attention label). */
+  pushPrompted?: boolean;
   /** First protocol round seen for the current draw (collision hint, Spec §11). */
   drawRound?: { drawNo: number; firstRound: number };
   updatedAt: number;

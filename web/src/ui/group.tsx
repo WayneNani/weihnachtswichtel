@@ -12,7 +12,7 @@ import { GroupController, type Snapshot } from "./controller";
 import { AdminPanel, ConfirmButton } from "./admin";
 import { EditEntry, JoinForm, NoteField, SaveLinkDialog } from "./join";
 import { MockTools } from "./mocktools";
-import { PushCard } from "./pushcard";
+import { PushBell, TopbarSlot } from "./pushbell";
 import { DisturbanceCard, DrawProgress, Fingerprint, ResultCard, RosterList } from "./status";
 
 type GroupRoute = Extract<Route, { page: "group" }>;
@@ -334,7 +334,11 @@ function GroupPageInner({ route, secretsFromUrl }: { route: GroupRoute; secretsF
         }
       />
 
-      {snap.isMember && personalLink && <PushCard ctrl={ctrl} personalLink={personalLink} title={meta.title} />}
+      {snap.isMember && personalLink && (
+        <TopbarSlot>
+          <PushBell ctrl={ctrl} personalLink={personalLink} title={meta.title} />
+        </TopbarSlot>
+      )}
 
       {snap.isMember && (
         <section class="card subtle">

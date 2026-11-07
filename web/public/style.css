@@ -146,6 +146,122 @@ a:hover {
   font-weight: 600;
 }
 
+/* ---------- notification bell (top bar) ---------- */
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.topbar-actions:empty {
+  display: none;
+}
+.bell-wrap {
+  position: relative;
+}
+.bell-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  min-width: 44px;
+  justify-content: center;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+.bell-button:hover {
+  border-color: var(--muted);
+}
+.bell-button.bell-attention {
+  background: var(--gold-soft);
+  border-color: var(--gold);
+  color: var(--text);
+}
+.bell-button.bell-on {
+  background: var(--green-soft);
+  border-color: var(--green);
+  color: var(--green);
+}
+.bell-button.bell-blocked {
+  color: var(--muted);
+}
+.bell-icon {
+  flex: none;
+}
+.bell-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--red);
+  box-shadow: 0 0 0 2px var(--card);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .bell-dot {
+    animation: bell-pulse 1.8s ease-out infinite;
+  }
+  .bell-attention .bell-icon {
+    animation: bell-ring 4s ease-in-out infinite;
+    transform-origin: 50% 15%;
+  }
+}
+@keyframes bell-pulse {
+  0% { box-shadow: 0 0 0 2px var(--card), 0 0 0 2px rgb(179 38 30 / 0.55); }
+  70% { box-shadow: 0 0 0 2px var(--card), 0 0 0 10px rgb(179 38 30 / 0); }
+  100% { box-shadow: 0 0 0 2px var(--card), 0 0 0 10px rgb(179 38 30 / 0); }
+}
+@keyframes bell-ring {
+  0%, 80%, 100% { transform: rotate(0); }
+  84% { transform: rotate(14deg); }
+  88% { transform: rotate(-12deg); }
+  92% { transform: rotate(8deg); }
+  96% { transform: rotate(-4deg); }
+}
+.bell-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 20;
+  width: min(22rem, calc(100vw - 32px));
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.18);
+  padding: 14px 16px 16px;
+  text-align: left;
+}
+.bell-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.bell-panel-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.bell-close {
+  font-size: 1.1rem;
+  min-width: 36px;
+  min-height: 36px;
+}
+.bell-panel ul {
+  padding-left: 1.2em;
+}
+
 .footer {
   color: var(--muted);
   font-size: 0.85rem;

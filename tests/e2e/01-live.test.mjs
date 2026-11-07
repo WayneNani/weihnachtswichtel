@@ -86,6 +86,18 @@ test("Szenario 1: Live-Modus mit 4 Teilnehmern", async () => {
       for (const p of PEOPLE) assert.ok(text.includes(p.name), `${d.label} sees ${p.name}`);
     }
 
+    // Notification bell in the top bar: visible for members, with an attention label until it was
+    // opened once; opens a dialog, Escape closes it again.
+    for (const d of devices) assert.equal(await d.page.locator(".topbar [data-testid=push-bell]").count(), 1, `${d.label}: bell in top bar`);
+    const bell = admin.page.getByTestId("push-bell");
+    assert.match(await bell.innerText(), /Benachrichtigen\?/);
+    await bell.click();
+    const bellDialog = admin.page.getByRole("dialog", { name: "Benachrichtigungen" });
+    await bellDialog.getByRole("button", { name: /Ja, benachrichtigen/ }).waitFor();
+    await admin.page.keyboard.press("Escape");
+    await bellDialog.waitFor({ state: "detached" });
+    assert.equal((await bell.innerText()).includes("Benachrichtigen?"), false, "label gone after first open");
+
     // Same fingerprint (8 words) everywhere.
     const fps = await Promise.all(devices.map((d) => fingerprint(d)));
     assert.equal(new Set(fps).size, 1, `fingerprints differ: ${fps.join(" | ")}`);
