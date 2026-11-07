@@ -1,44 +1,89 @@
-/* Weihnachtswichtel – mobile-first, festive but plain. No external resources. */
+/* Weihnachtswichtel – „Tannengrün & Gold“: evergreen night sky, cream paper cards, gold accents.
+   Mobile-first. No external resources (fonts are self-hosted). */
 
 :root {
   color-scheme: light dark;
-  --bg: #fbf7f2;
-  --bg-accent: #f3e9dc;
-  --card: #ffffff;
-  --text: #1f1b16;
-  --muted: #5d5650;
-  --border: #e4d9cc;
-  --red: #b3261e;
-  --red-strong: #8f1d17;
-  --red-soft: #fbe9e7;
-  --green: #1f6f43;
-  --green-soft: #e3f3e9;
-  --gold: #a87a12;
-  --gold-soft: #fbf1d9;
-  --focus: #c48a00;
-  --shadow: 0 1px 2px rgb(60 40 20 / 0.06), 0 4px 16px rgb(60 40 20 / 0.06);
-  --radius: 14px;
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  /* Page: evergreen night sky with gold stars; cards: cream paper. */
+  --page: #0e2a20;
+  --page-star: rgb(232 201 120 / 0.85);
+  --page-star-2: rgb(255 255 255 / 0.5);
+  --on-page: #f3e7c8;
+  --on-page-muted: #c9d6cc;
+  --bg: #fffcf4;
+  --bg-accent: #f3ead4;
+  --card: #fbf5e8;
+  --text: #1c2b23;
+  --muted: #4f5d54;
+  --border: #e0cfa6;
+  --red: #9e1b22;
+  --red-strong: #7e1520;
+  --red-soft: #f8e3e1;
+  --green: #1f5a3e;
+  --green-soft: #e1efe5;
+  --gold: #7a5c14;
+  --gold-bright: #d9b85c;
+  --gold-soft: #f6eac6;
+  --focus: #a87400;
+  --shadow: 0 2px 6px rgb(0 0 0 / 0.18), 0 10px 24px rgb(0 0 0 / 0.16);
+  --radius: 18px;
+  --font: "Source Sans 3", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --display: "Playfair Display", Georgia, "Times New Roman", serif;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #12100e;
-    --bg-accent: #1b1714;
-    --card: #1e1a17;
-    --text: #f3ede6;
-    --muted: #b8aea4;
-    --border: #3a322b;
-    --red: #ef6f64;
-    --red-strong: #ff8b80;
-    --red-soft: #3a1d1a;
-    --green: #6fcf97;
-    --green-soft: #17301f;
-    --gold: #e6b84a;
-    --gold-soft: #33280f;
+    --page: #091d16;
+    --page-star: rgb(232 201 120 / 0.7);
+    --page-star-2: rgb(255 255 255 / 0.35);
+    --on-page: #f3e7c8;
+    --on-page-muted: #b9c8bd;
+    --bg: #0f2c21;
+    --bg-accent: #1b4434;
+    --card: #143728;
+    --text: #f3e7c8;
+    --muted: #b9c8bd;
+    --border: #2f5d47;
+    --red: #f07a70;
+    --red-strong: #ff958c;
+    --red-soft: #3e1f1d;
+    --green: #7fd1a0;
+    --green-soft: #183d2b;
+    --gold: #e2c46f;
+    --gold-bright: #e2c46f;
+    --gold-soft: #3a3216;
     --focus: #f2c14e;
-    --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow: 0 2px 6px rgb(0 0 0 / 0.35), 0 10px 24px rgb(0 0 0 / 0.3);
   }
+}
+
+/* Self-hosted fonts (SIL Open Font License, see /fonts/OFL-*.txt) – no external requests. */
+@font-face {
+  font-family: "Playfair Display";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/playfair-display-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Source Sans 3";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/source-sans-3-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Source Sans 3";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/source-sans-3-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Source Sans 3";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/source-sans-3-latin-700-normal.woff2") format("woff2");
 }
 
 *,
@@ -53,9 +98,12 @@ html {
 
 body {
   margin: 0;
-  background: var(--bg);
-  background-image: radial-gradient(circle at 10% 0%, var(--bg-accent), transparent 40%),
-    radial-gradient(circle at 90% 10%, var(--bg-accent), transparent 35%);
+  min-height: 100vh;
+  background-color: var(--page);
+  background-image: radial-gradient(circle at 22px 30px, var(--page-star) 1.2px, transparent 1.8px),
+    radial-gradient(circle at 70px 90px, var(--page-star-2) 0.9px, transparent 1.5px),
+    radial-gradient(circle at 110px 20px, var(--page-star) 1px, transparent 1.6px);
+  background-size: 130px 140px;
   background-attachment: fixed;
   color: var(--text);
   font-family: var(--font);
@@ -72,14 +120,20 @@ body {
 h1,
 h2,
 h3 {
-  line-height: 1.25;
+  line-height: 1.2;
   margin: 0 0 0.5em;
 }
+h1,
+h2 {
+  font-family: var(--display);
+  font-weight: 700;
+  letter-spacing: 0.005em;
+}
 h1 {
-  font-size: 1.6rem;
+  font-size: 1.9rem;
 }
 h2 {
-  font-size: 1.25rem;
+  font-size: 1.35rem;
 }
 h3 {
   font-size: 1.05rem;
@@ -105,6 +159,7 @@ a:hover {
   position: absolute;
   left: -999px;
   top: 8px;
+  color: var(--text);
   background: var(--card);
   padding: 8px 12px;
   z-index: 10;
@@ -131,15 +186,27 @@ a:hover {
   padding: 14px 4px 10px;
 }
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  font-family: var(--display);
   font-weight: 700;
-  font-size: 1.15rem;
-  color: var(--text);
+  font-size: 1.45rem;
+  color: var(--on-page);
   text-decoration: none;
 }
+.brand:hover {
+  color: #fff;
+}
+.brand-icon {
+  color: var(--gold-bright);
+  flex: none;
+}
 .mock-badge {
-  background: var(--gold-soft);
-  color: var(--gold);
-  border: 1px solid var(--gold);
+  background: transparent;
+  color: var(--gold-bright);
+  border: 1px solid var(--gold-bright);
   border-radius: 999px;
   padding: 1px 10px;
   font-size: 0.8rem;
@@ -182,17 +249,27 @@ a:hover {
   border-color: var(--muted);
 }
 .bell-button.bell-attention {
-  background: var(--gold-soft);
-  border-color: var(--gold);
-  color: var(--text);
+  background: rgb(217 184 92 / 0.16);
+  border: 1.5px solid var(--gold-bright);
+  color: var(--on-page);
+  box-shadow: none;
 }
 .bell-button.bell-on {
-  background: var(--green-soft);
-  border-color: var(--green);
-  color: var(--green);
+  background: var(--gold-bright);
+  border-color: var(--gold-bright);
+  color: #0e2a20;
+}
+.bell-button.bell-off:not(.bell-attention) {
+  background: transparent;
+  border-color: rgb(217 184 92 / 0.6);
+  color: var(--on-page);
+  box-shadow: none;
 }
 .bell-button.bell-blocked {
-  color: var(--muted);
+  background: transparent;
+  border-color: rgb(201 214 204 / 0.4);
+  color: var(--on-page-muted);
+  box-shadow: none;
 }
 .bell-icon {
   flex: none;
@@ -204,8 +281,8 @@ a:hover {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--red);
-  box-shadow: 0 0 0 2px var(--card);
+  background: #e0444d;
+  box-shadow: 0 0 0 2px var(--page);
 }
 @media (prefers-reduced-motion: no-preference) {
   .bell-dot {
@@ -217,9 +294,9 @@ a:hover {
   }
 }
 @keyframes bell-pulse {
-  0% { box-shadow: 0 0 0 2px var(--card), 0 0 0 2px rgb(179 38 30 / 0.55); }
-  70% { box-shadow: 0 0 0 2px var(--card), 0 0 0 10px rgb(179 38 30 / 0); }
-  100% { box-shadow: 0 0 0 2px var(--card), 0 0 0 10px rgb(179 38 30 / 0); }
+  0% { box-shadow: 0 0 0 2px var(--page), 0 0 0 2px rgb(224 68 77 / 0.6); }
+  70% { box-shadow: 0 0 0 2px var(--page), 0 0 0 10px rgb(224 68 77 / 0); }
+  100% { box-shadow: 0 0 0 2px var(--page), 0 0 0 10px rgb(224 68 77 / 0); }
 }
 @keyframes bell-ring {
   0%, 80%, 100% { transform: rotate(0); }
@@ -251,7 +328,7 @@ a:hover {
 }
 .bell-panel-head h2 {
   margin: 0;
-  font-size: 1.05rem;
+  font-size: 1.15rem;
 }
 .bell-close {
   font-size: 1.1rem;
@@ -263,13 +340,16 @@ a:hover {
 }
 
 .footer {
-  color: var(--muted);
+  color: var(--on-page-muted);
   font-size: 0.85rem;
   text-align: center;
   padding: 16px 8px;
 }
 .footer-links a {
-  color: var(--muted);
+  color: var(--on-page-muted);
+}
+.footer-links a:hover {
+  color: var(--on-page);
 }
 
 /* Static pages (impressum.html, datenschutz.html) */
@@ -306,23 +386,52 @@ a:hover {
 
 .hero {
   text-align: center;
-  padding: 20px 8px 28px;
+  padding: 24px 8px 30px;
+  color: var(--on-page);
 }
 .hero h1 {
-  font-size: 1.9rem;
+  font-size: 2.3rem;
+  line-height: 1.1;
 }
-.hero h1::before {
-  content: "🎄 ";
+.hero-star {
+  display: block;
+  margin: 0 auto 10px;
+  color: var(--gold-bright);
 }
 .lead {
-  font-size: 1.1rem;
+  font-size: 1.15rem;
   color: var(--muted);
 }
+.hero .lead {
+  color: var(--on-page-muted);
+}
 
+/* The group head sits directly on the evergreen page (no paper card). */
+.card.group-head {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 6px 4px 2px;
+  color: var(--on-page);
+}
+.group-eyebrow {
+  margin: 0 0 4px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+}
 .group-head h1 {
-  border-bottom: 3px dotted var(--red);
-  padding-bottom: 6px;
-  display: inline-block;
+  font-size: 2.2rem;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+.group-head .hint {
+  color: var(--on-page-muted);
+}
+.group-head .notice {
+  color: var(--text);
 }
 .meta-list {
   list-style: none;
@@ -330,13 +439,30 @@ a:hover {
   margin: 0 0 10px;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 16px;
+  gap: 6px 18px;
   color: var(--muted);
+}
+.group-head .meta-list {
+  color: var(--on-page-muted);
+}
+.meta-list li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.meta-icon {
+  color: var(--gold-bright);
+  flex: none;
 }
 .description {
   background: var(--bg-accent);
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 10px 12px;
+}
+.group-head .description {
+  background: rgb(255 255 255 / 0.06);
+  border: 1px solid rgb(217 184 92 / 0.35);
+  color: var(--on-page);
 }
 .pre {
   white-space: pre-wrap;
@@ -403,7 +529,7 @@ input[readonly] {
   color: var(--text);
   background: var(--card);
   border: 1.5px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   cursor: pointer;
 }
 .btn:hover:not(:disabled) {
@@ -416,7 +542,7 @@ input[readonly] {
 .btn-primary {
   background: var(--red);
   border-color: var(--red);
-  color: #fff;
+  color: #fff6e6;
 }
 @media (prefers-color-scheme: dark) {
   .btn-primary {
@@ -599,27 +725,106 @@ input[readonly] {
 
 /* ---------- countdown ---------- */
 
+/* Countdown: three baubles hanging from a gold garland. */
 .countdown {
   display: grid;
   justify-items: center;
   text-align: center;
-  background: var(--green-soft);
-  color: var(--green);
-  border-radius: 12px;
-  padding: 12px;
-  margin: 12px 0 4px;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 0 16px 16px;
+  margin: 16px 0 6px;
+  overflow: hidden;
 }
-.countdown-label {
-  font-size: 0.85rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+.countdown::before {
+  content: "";
+  justify-self: stretch;
+  height: 2px;
+  margin: 0 -16px;
+  background: linear-gradient(90deg, transparent, var(--gold-bright) 18%, var(--gold-bright) 82%, transparent);
 }
-.countdown-value {
-  font-size: 1.6rem;
+.baubles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 84px));
+  justify-content: center;
+  gap: 14px;
+  align-items: start;
+}
+.bauble {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.bauble-string {
+  width: 2px;
+  height: 22px;
+  background: #b89645;
+}
+.bauble:nth-child(2) .bauble-string {
+  height: 36px;
+}
+.bauble:nth-child(3) .bauble-string {
+  height: 14px;
+}
+.bauble-cap {
+  width: 16px;
+  height: 9px;
+  border-radius: 3px 3px 1px 1px;
+  background: #c9a54e;
+}
+.bauble-ball {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #fff6e6;
+  background: radial-gradient(circle at 34% 30%, #e45a61 0%, #b21f2b 55%, #7e1520 100%);
+  box-shadow: 0 6px 14px rgb(126 21 32 / 0.35);
+}
+.bauble:nth-child(2) .bauble-ball {
+  color: #2a1e05;
+  background: radial-gradient(circle at 34% 30%, #f0d488 0%, #c9a23f 55%, #8c6b1e 100%);
+  box-shadow: 0 6px 14px rgb(140 107 30 / 0.35);
+}
+.bauble:nth-child(3) .bauble-ball {
+  background: radial-gradient(circle at 34% 30%, #4e8b6a 0%, #1f5a3e 55%, #123826 100%);
+  box-shadow: 0 6px 14px rgb(18 56 38 / 0.35);
+}
+.bauble-num {
+  font-family: var(--display);
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
 }
+.bauble-unit {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.countdown-label {
+  margin-top: 14px;
+  font-family: var(--display);
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+.countdown-soon {
+  margin-top: 14px;
+  font-family: var(--display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--red);
+}
 .countdown-at {
-  font-size: 0.9rem;
+  font-size: 0.95rem;
+  color: var(--muted);
 }
 
 /* ---------- fingerprint ---------- */
@@ -683,6 +888,17 @@ input[readonly] {
 .roster-name {
   font-weight: 600;
   flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.roster-name::before {
+  content: "";
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background: #c9a23f;
+  clip-path: polygon(50% 0, 61.8% 35%, 98% 35%, 68.8% 57%, 79.4% 91%, 50% 70%, 20.6% 91%, 31.2% 57%, 2% 35%, 38.2% 35%);
 }
 .roster-state {
   font-size: 0.85rem;
@@ -810,26 +1026,70 @@ progress {
 /* ---------- result ---------- */
 
 .result-card {
-  border: 2px solid var(--red);
-  background-image: repeating-linear-gradient(135deg, transparent 0 18px, var(--red-soft) 18px 20px);
-  background-size: 100% 8px;
-  background-repeat: no-repeat;
-  padding-top: 26px;
+  border: 1px solid var(--border);
 }
 .reveal-gate {
   text-align: center;
   padding: 16px 0;
 }
-.result-line {
-  font-size: 1.25rem;
+.gift {
+  position: relative;
+  margin: 46px 0 18px;
+  padding: 46px 16px 24px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
-  margin: 12px 0 16px;
+  isolation: isolate;
+}
+.gift::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0 auto 0 50%;
+  width: 26px;
+  margin-left: -13px;
+  background: linear-gradient(90deg, #8c1720, #b3242e 40%, #8c1720);
+}
+.gift-bow {
+  position: absolute;
+  top: -32px;
+  left: 50%;
+  margin-left: -56px;
+}
+.gift-label {
+  position: relative;
+  background: var(--bg);
+  border-radius: 12px;
+  padding: 6px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+}
+.result-line {
+  font-family: var(--display);
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0;
 }
 .result-name {
   display: block;
-  font-size: 2.2rem;
-  color: var(--red);
+  font-family: var(--display);
+  font-size: 2.8rem;
+  line-height: 1.1;
+  color: var(--text);
   overflow-wrap: anywhere;
+}
+.result-sub {
+  margin-top: 4px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--gold);
 }
 .result-block {
   background: var(--bg-accent);

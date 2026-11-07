@@ -173,13 +173,43 @@ export function countdownText(seconds: number): string {
   return h > 0 ? `${h}:${p(m)}:${p(s)} Std.` : `${p(m)}:${p(s)} Min.`;
 }
 
+/** The three baubles of the countdown: days/hours/minutes, or hours/minutes/seconds on the last day. */
+export function countdownParts(seconds: number): { value: string; unit: string }[] {
+  const s = Math.max(0, Math.floor(seconds));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const p = (n: number) => String(n).padStart(2, "0");
+  if (d >= 1) return [{ value: p(d), unit: d === 1 ? "Tag" : "Tage" }, { value: p(h), unit: "Std." }, { value: p(m), unit: "Min." }];
+  return [{ value: p(h), unit: "Std." }, { value: p(m), unit: "Min." }, { value: p(s % 60), unit: "Sek." }];
+}
+
 export function Countdown({ at }: { at: number }) {
   const now = useNow(1000);
   const left = Math.max(0, Math.round(at - now / 1000));
   return (
     <div class="countdown" role="timer" aria-live="off">
+      {left > 0 ? (
+        <div class="baubles" aria-hidden="true">
+          {countdownParts(left).map((part) => (
+            <div class="bauble" key={part.unit}>
+              <span class="bauble-string" />
+              <span class="bauble-cap" />
+              <span class="bauble-ball">
+                <span class="bauble-num">{part.value}</span>
+                <span class="bauble-unit">{part.unit}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <span class="countdown-soon" aria-hidden="true">
+          Gleich geht’s los …
+        </span>
+      )}
+      {/* Text form for screen readers (and tests); the baubles above show the same. */}
+      <strong class="countdown-value sr-only">{left > 0 ? `Verlosung in ${countdownText(left)}` : "Verlosung startet gleich …"}</strong>
       <span class="countdown-label">Verlosung</span>
-      <strong class="countdown-value">{left > 0 ? `in ${countdownText(left)}` : "startet gleich …"}</strong>
       <span class="countdown-at">{formatDateTime(at)}</span>
     </div>
   );

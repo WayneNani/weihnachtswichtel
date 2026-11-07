@@ -69,7 +69,12 @@ export function App({ services }: { services: Services }) {
             navigate("/");
           }}
         >
-          <span aria-hidden="true">🎁</span> Wichteln
+          <svg class="brand-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">
+            <path d="M12 2.5l1.5 3 3.3.4-2.4 2.3.6 3.3L12 10l-3 1.5.6-3.3-2.4-2.3 3.3-.4Z" />
+            <path d="M12 11.5l-6.5 9h13Z" />
+            <path d="M12 20.5v2" />
+          </svg>
+          Wichteln
         </a>
         <div class="topbar-right">
           {__MOCK__ && <span class="mock-badge" title="Mock-Modus: keine echte Kryptographie">Mock</span>}

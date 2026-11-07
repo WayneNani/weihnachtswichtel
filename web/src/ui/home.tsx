@@ -25,6 +25,9 @@ export function HomePage() {
   return (
     <>
       <section class="hero">
+        <svg class="hero-star" width="44" height="44" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 2l2.9 6.3 6.9.7-5.2 4.6 1.5 6.8L12 17l-6.1 3.4 1.5-6.8L2.2 9l6.9-.7Z" />
+        </svg>
         <h1>Wichteln, ganz ohne Geheimnisverrat</h1>
         <p class="lead">
           Leg eine Runde an, teile den Einladungslink in eurem Gruppenchat – fertig. Kein Konto, keine App, keine

@@ -3,7 +3,7 @@
 import { writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
-const RED = [179, 38, 30];
+const RED = [14, 42, 32]; // evergreen background (also fills the bow loops)
 const CREAM = [255, 247, 236];
 const GOLD = [230, 184, 74];
 const SHADE = [236, 222, 204];

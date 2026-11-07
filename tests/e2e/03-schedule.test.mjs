@@ -48,12 +48,12 @@ async function setScheduleApi(gid, a, drawAt) {
   assert.equal(r.status, 204, await r.text());
 }
 
-/** Countdown value in seconds as shown (`in MM:SS Min.` / `in H:MM:SS Std.`). */
+/** Countdown value in seconds as announced (`Verlosung in MM:SS Min.` / `Verlosung in H:MM:SS Std.`). */
 async function countdownSeconds(dev) {
   const text = await dev.page.locator(".countdown .countdown-value").innerText();
-  let m = /^in (\d\d):(\d\d) Min\.$/.exec(text);
+  let m = /^(?:Verlosung )?in (\d\d):(\d\d) Min\.$/.exec(text);
   if (m) return Number(m[1]) * 60 + Number(m[2]);
-  m = /^in (\d+):(\d\d):(\d\d) Std\.$/.exec(text);
+  m = /^(?:Verlosung )?in (\d+):(\d\d):(\d\d) Std\.$/.exec(text);
   if (m) return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
   assert.fail(`unexpected countdown: ${text}`);
 }

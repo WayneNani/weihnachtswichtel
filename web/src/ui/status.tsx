@@ -225,14 +225,31 @@ export function ResultCard(props: {
         <div class="reveal-gate">
           <p>Schau, dass niemand mitliest – dann:</p>
           <button type="button" class="btn btn-primary btn-big" onClick={() => setRevealed(true)}>
-            🎁 Aufdecken
+            Aufdecken
           </button>
         </div>
       ) : (
         <>
-          <p class="result-line">
-            Du beschenkst: <strong class="result-name">{name}</strong>
-          </p>
+          <div class="gift">
+            <svg class="gift-bow" width="112" height="62" viewBox="0 0 112 62" fill="none" aria-hidden="true">
+                <path d="M56 34 C 40 6, 6 2, 8 22 C 10 40, 38 40, 56 34 Z" fill="#b3242e" stroke="#7e1520" stroke-width="2" />
+                <path d="M56 34 C 72 6, 106 2, 104 22 C 102 40, 74 40, 56 34 Z" fill="#b3242e" stroke="#7e1520" stroke-width="2" />
+                <path d="M50 36 L 40 60 L 50 54 L 56 62 L 56 36 Z" fill="#9e1b22" />
+                <path d="M62 36 L 72 60 L 62 54 L 56 62 L 56 36 Z" fill="#9e1b22" />
+                <circle cx="56" cy="33" r="8" fill="#d9b85c" stroke="#8c6b1e" stroke-width="2" />
+              </svg>
+            <div class="gift-label">
+              <p class="result-line">Du beschenkst</p>
+              <strong class="result-name">{name}</strong>
+              {(props.meta.budget || props.meta.event_date) && (
+                <span class="result-sub">
+                  {[props.meta.budget && `Budget: ${props.meta.budget}`, props.meta.event_date && formatDate(props.meta.event_date)]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+              )}
+            </div>
+          </div>
           {props.recipient?.wish ? (
             <div class="result-block">
               <h3>Wunschzettel von {name}</h3>
@@ -247,10 +264,6 @@ export function ResultCard(props: {
               <p class="pre">{props.note}</p>
             </div>
           )}
-          <p class="hint">
-            {props.meta.budget && <>Budget: {props.meta.budget}. </>}
-            {props.meta.event_date && <>Gewichtelt wird am {formatDate(props.meta.event_date)}.</>}
-          </p>
           <p class="hint">Psst: Das Ergebnis siehst nur du. Auch der Spielleiter kennt es nicht.</p>
           <button type="button" class="btn" onClick={() => setRevealed(false)}>
             Wieder verdecken
