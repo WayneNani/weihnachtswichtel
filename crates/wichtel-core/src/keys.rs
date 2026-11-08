@@ -221,6 +221,8 @@ fn lp_len(x: &[u8]) -> [u8; 4] {
 pub enum UploadKind {
     Roles = 1,
     Reveal = 2,
+    /// Contact to the recipient (Spec §16.2); `round` = round of `Done`.
+    Contact = 3,
 }
 
 fn verifying_key(ipk: &[u8; 32]) -> Result<VerifyingKey> {

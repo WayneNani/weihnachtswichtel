@@ -12,9 +12,11 @@
 //! - [`dcnet`]: role vector (step 1) and its evaluation (Spec §7)
 //! - [`draw`]: `ρ`, `σ_t` and unbiased sampling (Spec §7.2, §8)
 //! - [`reveal`]: self-draw vector, reveals, choice of `t*`, result (Spec §9)
+//! - [`contact`]: anonymous contact from the giver to the recipient (Spec §16.2)
 
 #![forbid(unsafe_code)]
 
+pub mod contact;
 pub mod dcnet;
 pub mod draw;
 pub mod gk;
@@ -52,6 +54,12 @@ pub const WISH_MAX: usize = 1000;
 pub const META_MAX: usize = 2000;
 /// Maximum UTF-8 bytes of the private note in a reveal.
 pub const NOTE_MAX: usize = L_PT - 1 - 16 - 32 - 2;
+/// Plaintext length of a contact (Spec §16.2).
+pub const L_KP: usize = 768;
+/// Length of a contact (`enc ‖ ct ‖ tag`, Spec §16.2).
+pub const L_K: usize = 32 + L_KP + 16;
+/// Maximum UTF-8 bytes of the push endpoint URL in a contact (Spec §16.2).
+pub const ENDPOINT_MAX: usize = 700;
 
 /// Slots in area E for `n` participants: `16·n²`.
 pub const fn m_e(n: usize) -> usize {
@@ -105,6 +113,8 @@ pub enum Error {
     RevealCount,
     #[error("randomness unavailable")]
     Rng,
+    #[error("more than one valid contact")]
+    ContactCount,
 }
 
 pub type Result<T> = core::result::Result<T, Error>;

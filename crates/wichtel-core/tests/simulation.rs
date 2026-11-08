@@ -4,10 +4,12 @@ mod common;
 
 use common::*;
 use wichtel_core::Error;
+use wichtel_core::contact::{build_contact, open_contacts};
 use wichtel_core::dcnet::{build_roles_vector, evaluate_roles, xor_into};
 use wichtel_core::gk::{self, GkContext};
+use wichtel_core::keys::{UploadKind, verify_upload};
 use wichtel_core::roster::{Roster, group_context};
-use wichtel_core::{GroupId, roles_vector_len};
+use wichtel_core::{GroupId, L_K, roles_vector_len};
 
 fn normal(n: usize, run: u64) {
     let gid = gid_for(run);
@@ -293,5 +295,197 @@ fn deterministic_replay() {
             build_roles_vector(&x.keys, &gid, 1, &roster).unwrap(),
             build_roles_vector(&y.keys, &gid, 1, &roster).unwrap()
         );
+    }
+}
+
+/// Spec §16.2 contacts of a finished round: endpoint per giver and the served bytes.
+struct Contacts {
+    endpoints: Vec<String>,
+    served: Vec<u8>,
+}
+
+/// Every client of a finished round uploads its contact (endpoint `ep(i)`, signature kind 3);
+/// the server serves them sorted (here: by bytes) and without pids.
+fn upload_contacts(
+    gid: &GroupId,
+    round: u32,
+    roster: &Roster,
+    clients: &[&Client],
+    report: &RoundReport,
+    ep: fn(usize) -> String,
+) -> Contacts {
+    let RoundReport::Done {
+        public,
+        own,
+        results,
+    } = report
+    else {
+        panic!("round not done");
+    };
+    let mut blocks = Vec::new();
+    let mut endpoints = Vec::new();
+    for (i, c) in clients.iter().enumerate() {
+        let recipient = results[i].as_ref().unwrap().recipient;
+        let idh = roster.entries()[roster.index_of(&recipient).unwrap()].idh;
+        let endpoint = ep(i);
+        let k = build_contact(
+            &c.keys,
+            gid,
+            round,
+            roster,
+            &public.outcome,
+            own[i].as_ref().unwrap(),
+            public.t_star,
+            &idh,
+            &endpoint,
+        )
+        .unwrap();
+        assert_eq!(k.len(), L_K);
+        let sig = c.keys.sign_upload(UploadKind::Contact, round, &k);
+        let p = c.keys.public();
+        verify_upload(gid, &p.pid, &p.ipk, UploadKind::Contact, round, &k, &sig).unwrap();
+        blocks.push(k);
+        endpoints.push(endpoint);
+    }
+    blocks.sort();
+    Contacts {
+        endpoints,
+        served: blocks.concat(),
+    }
+}
+
+/// Client `j` opens `contacts` with its state of `report` and attempt `t` (default `t*`).
+#[allow(clippy::too_many_arguments)]
+fn open_as(
+    gid: &GroupId,
+    round: u32,
+    roster: &Roster,
+    clients: &[&Client],
+    report: &RoundReport,
+    j: usize,
+    t: Option<u8>,
+    contacts: &[u8],
+) -> Result<Option<String>, Error> {
+    let RoundReport::Done { public, own, .. } = report else {
+        panic!("round not done");
+    };
+    open_contacts(
+        &clients[j].keys,
+        gid,
+        round,
+        roster,
+        &public.outcome,
+        own[j].as_ref().unwrap(),
+        t.unwrap_or(public.t_star),
+        contacts,
+    )
+}
+
+fn endpoint_even(i: usize) -> String {
+    if i.is_multiple_of(2) {
+        format!("https://push.example/send/{i}")
+    } else {
+        String::new()
+    }
+}
+
+fn endpoint_all(i: usize) -> String {
+    format!("https://push.example/next/{i}")
+}
+
+#[test]
+fn contacts_reach_exactly_the_own_giver() {
+    let gid = gid_for(88);
+    let clients = make_clients(&gid, 88, 5);
+    let roster = roster_of(&gid, &clients);
+    let refs: Vec<&Client> = clients.iter().collect();
+    let n = refs.len();
+    let (round, report, _) = run_until_done(&gid, 1, &roster, &refs, 20);
+    let assignment = check_done(&refs, &report);
+    let giver_of = |j: usize| assignment.iter().position(|&r| r == j).unwrap();
+    let open =
+        |j: usize, t: Option<u8>, c: &[u8]| open_as(&gid, round, &roster, &refs, &report, j, t, c);
+
+    // Every recipient finds exactly the endpoint of its giver; empty endpoint ⇒ None.
+    let k = upload_contacts(&gid, round, &roster, &refs, &report, endpoint_even);
+    for j in 0..n {
+        let ep = &k.endpoints[giver_of(j)];
+        let expected = (!ep.is_empty()).then(|| ep.clone());
+        assert_eq!(open(j, None, &k.served), Ok(expected), "recipient {j}");
+    }
+
+    // Contacts of everybody else to j (wrong skS) do not open; among all of them j still finds
+    // exactly the one of its giver.
+    let RoundReport::Done { public, own, .. } = &report else {
+        unreachable!()
+    };
+    const STRANGER: &str = "https://push.example/stranger";
+    for (j, recipient) in clients.iter().enumerate() {
+        let idh = recipient.keys.public().idh;
+        let mut all = Vec::new();
+        for i in (0..n).filter(|&i| i != j) {
+            let c = build_contact(
+                &refs[i].keys,
+                &gid,
+                round,
+                &roster,
+                &public.outcome,
+                own[i].as_ref().unwrap(),
+                public.t_star,
+                &idh,
+                STRANGER,
+            )
+            .unwrap();
+            if i != giver_of(j) {
+                assert_eq!(open(j, None, &c), Ok(None), "stranger {i} → {j}");
+            }
+            all.extend_from_slice(&c);
+        }
+        assert_eq!(open(j, None, &all), Ok(Some(STRANGER.to_owned())));
+    }
+
+    // Another t*: either unusable for the client or the contacts do not open.
+    for t in (1..=16u8).filter(|&t| t != public.t_star) {
+        for j in 0..n {
+            match open(j, Some(t), &k.served) {
+                Ok(None) | Err(Error::AttemptMismatch) => {}
+                other => panic!("t = {t}, client {j}: {other:?}"),
+            }
+        }
+    }
+
+    // Broken lengths.
+    for len in [1, L_K - 1, L_K + 1, k.served.len() - 1] {
+        assert_eq!(
+            open(0, None, &k.served[..len]).err(),
+            Some(Error::InvalidLength),
+            "{len}"
+        );
+    }
+    let mut long = k.served.clone();
+    long.push(0);
+    assert_eq!(open(0, None, &long).err(), Some(Error::InvalidLength));
+    assert_eq!(open(0, None, &[]), Ok(None));
+
+    // A second upload with the same endpoint gives different bytes (fresh ephemeral).
+    let again = upload_contacts(&gid, round, &roster, &refs, &report, endpoint_even);
+    for a in again.served.chunks(L_K) {
+        assert!(k.served.chunks(L_K).all(|b| a != b));
+    }
+    // Both versions of one giver at once (server did not replace) ⇒ error.
+    let j = assignment[0];
+    let both = [&k.served[..], &again.served[..]].concat();
+    assert_eq!(open(j, None, &both), Err(Error::ContactCount));
+
+    // New draw (r+1, same roster): old contacts do not open with the new state and vice versa.
+    let (round2, report2, _) = run_until_done(&gid, round + 1, &roster, &refs, 20);
+    let assignment2 = check_done(&refs, &report2);
+    let k2 = upload_contacts(&gid, round2, &roster, &refs, &report2, endpoint_all);
+    for j in 0..n {
+        let giver2 = assignment2.iter().position(|&r| r == j).unwrap();
+        let open2 = |c: &[u8]| open_as(&gid, round2, &roster, &refs, &report2, j, None, c);
+        assert_eq!(open2(&k2.served), Ok(Some(endpoint_all(giver2))));
+        assert_eq!(open2(&k.served), Ok(None));
+        assert_eq!(open(j, None, &k2.served), Ok(None));
     }
 }
