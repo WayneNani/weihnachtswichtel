@@ -213,7 +213,8 @@ export class ProtocolDriver {
 
   /**
    * Spec §16.3: the anonymous endpoint of the own Schenker from the contacts of the current draw,
-   * or null (not done, nothing uploaded, Schenker without push, or any error).
+   * or null (not done, nothing uploaded, Schenker without push, or any error – including the WASM
+   * error CONTACT_COUNT, i.e. more than one valid contact: then simply no hint is sent).
    */
   async findNotifyEndpoint(view: GroupView, roster: RosterEntryInput[]): Promise<string | null> {
     if (view.state !== "done") return null;
