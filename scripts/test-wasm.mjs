@@ -7,7 +7,8 @@
 // `wasm-bindgen --target nodejs` into a temp directory), then
 //   1. checks the test vectors crates/wichtel-core/tests/vectors/v1.json,
 //   2. checks error codes (thrown WichtelError with stable `code`),
-//   3. runs a complete protocol with n = 4 against an in-memory mailbox (no server),
+//   3. runs a complete protocol with n = 4 against an in-memory mailbox (no server), including
+//      the contacts to the recipients (Spec §16.2),
 //   4. measures run times (roles vector n = 20/30, reveal upload / HPKE seal, open_result).
 //
 // Environment: WICHTEL_WASM = path to wichtel_wasm.wasm (default: cargo output under
@@ -40,6 +41,8 @@ const T = 16;
 const L_SD = 256;
 const L_CT = 560;
 const L_REVEAL = L_SD + T * L_CT;
+const L_K = 32 + 768 + 16;
+const ENDPOINT_MAX = 700;
 const rolesLen = (n) => 2688 * n * n;
 
 // ---------------------------------------------------------------------------------------------
@@ -281,11 +284,11 @@ test("signatures verify with node:crypto", () => {
   const msg = joinMsg(gidV, k.ipk, k.idh, authHash(k.authToken), encName, encWish);
   assert.ok(ed25519Verify(k.ipk, msg, sig));
   assert.ok(!ed25519Verify(k.ipk, joinMsg(gidV, k.ipk, k.idh, authHash(k.authToken), encWish, encName), sig));
-  for (const kind of [1, 2]) {
+  for (const kind of [1, 2, 3]) {
     const body = random(100);
     const s = k.signUpload(kind, 7, body);
     assert.ok(ed25519Verify(k.ipk, uploadMsg(kind, gidV, 7, k.pid, body), s));
-    assert.ok(!ed25519Verify(k.ipk, uploadMsg(3 - kind, gidV, 7, k.pid, body), s));
+    assert.ok(!ed25519Verify(k.ipk, uploadMsg((kind % 3) + 1, gidV, 7, k.pid, body), s));
   }
 });
 
@@ -321,7 +324,8 @@ test("error codes", () => {
   expectCode("INVALID_LENGTH", () => w.deriveKeys(random(31), gidV));
   expectCode("INVALID_LENGTH", () => w.deriveKeys(random(32), random(15)));
   expectCode("INVALID_LENGTH", () => w.adminHash(random(33)));
-  expectCode("INVALID_ARGUMENT", () => k.signUpload(3, 1, random(4)));
+  expectCode("INVALID_ARGUMENT", () => k.signUpload(4, 1, random(4)));
+  expectCode("INVALID_ARGUMENT", () => k.signUpload(0, 1, random(4)));
   expectCode("INVALID_ARGUMENT", () => k.signUpload(1, -1, random(4)));
   expectCode("INVALID_ARGUMENT", () => k.signUpload(1, 1.5, random(4)));
   // Roster shape.
@@ -435,6 +439,7 @@ class Mailbox {
     this.members = new Map(); // b64(pid) → join record
     this.round = 1;
     this.uploads = new Map(); // `${round}/${kind}/${pid}` → body
+    this.contacts = new Map(); // b64(pid) → contact (current draw)
   }
   join(rec) {
     const ah = sha256(enc("wichtel/v1/auth-hash"), rec.authToken);
@@ -467,6 +472,22 @@ class Mailbox {
     }
     assert.equal(count, this.members.size);
     return acc;
+  }
+  /** Spec §16.2: one contact per participant and draw; a new upload replaces the old one. */
+  uploadContact(round, pid, body, sig) {
+    assert.equal(round, this.round, "contact for the round of Done");
+    assert.equal(body.length, L_K);
+    const m = this.members.get(b64e(pid));
+    assert.ok(ed25519Verify(m.ipk, uploadMsg(3, this.gid, round, pid, body), sig), "contact sig");
+    this.contacts.set(b64e(pid), body);
+  }
+  /** All contacts, sorted by H(K), without pids. */
+  contactsBlob() {
+    const blocks = [...this.contacts.values()];
+    blocks.sort((a, b) => Buffer.compare(Buffer.from(sha256(a)), Buffer.from(sha256(b))));
+    const out = new Uint8Array(blocks.length * L_K);
+    blocks.forEach((b, i) => out.set(b, i * L_K));
+    return out;
   }
   revealsFor(tStar) {
     return [...this.members.values()].map(({ pid }) => ({
@@ -559,10 +580,69 @@ function runProtocol(n, { measure = false } = {}) {
     });
     assert.equal(recipients.size, n);
     console.log(`  round ${round}: t* = ${tStar}, ${people.map((p, i) => `${p.name}→${byPid.get(b64e(results[i].recipientPid)).name}`).join(", ")}`);
+    contactRoundTrip({ box, gid, round, roster, people, evals, tStar, results });
     people.forEach((p) => p.keys.free());
     return { round, tStar };
   }
   throw new Error("no result after 10 rounds");
+}
+
+/** Spec §16.2 after Done: every participant uploads its contact; each finds its giver's. */
+function contactRoundTrip({ box, gid, round, roster, people, evals, tStar, results }) {
+  const idhOf = (pid) => roster.find((e) => hex(e.pid) === hex(pid)).idh;
+  // Giver 0 has push off (empty endpoint), the others have an endpoint.
+  const endpointOf = (i) => (i === 0 ? "" : `https://push.example/wish/${b64e(people[i].keys.pid)}`);
+  const build = (i, endpoint, idh = idhOf(results[i].recipientPid), t = tStar) =>
+    w.buildContact(people[i].keys, gid, round, roster, evals[i].state, t, idh, endpoint);
+  const open = (j, blob, t = tStar) =>
+    w.openContacts(people[j].keys, gid, round, roster, evals[j].state, t, blob);
+  const giverOf = (j) => results.findIndex((r) => hex(r.recipientPid) === hex(people[j].keys.pid));
+
+  // Nothing uploaded yet.
+  people.forEach((_, j) => assert.equal(open(j, box.contactsBlob()), null));
+  people.forEach((p, i) => {
+    const k = build(i, endpointOf(i));
+    assert.equal(k.length, L_K);
+    box.uploadContact(round, p.keys.pid, k, p.keys.signUpload(3, round, k));
+  });
+  const blob = box.contactsBlob();
+  assert.equal(blob.length, people.length * L_K);
+  people.forEach((_, j) => {
+    const g = giverOf(j);
+    assert.equal(open(j, blob), g === 0 ? null : endpointOf(g), `recipient ${j}`);
+  });
+
+  // Fresh randomness: same endpoint ⇒ different bytes; replacing keeps exactly one valid.
+  const i = 1;
+  const j = people.findIndex((p) => hex(p.keys.pid) === hex(results[i].recipientPid));
+  const a = build(i, endpointOf(i));
+  const b = build(i, endpointOf(i));
+  assert.notEqual(hex(a), hex(b));
+  box.uploadContact(round, people[i].keys.pid, b, people[i].keys.signUpload(3, round, b));
+  assert.equal(open(j, box.contactsBlob()), endpointOf(i));
+  // Two valid contacts of the own giver (server did not replace) ⇒ CONTACT_COUNT.
+  const both = new Uint8Array(2 * L_K);
+  both.set(a, 0);
+  both.set(b, L_K);
+  expectCode("CONTACT_COUNT", () => open(j, both));
+  // A contact to j from someone who is not j's giver does not open.
+  const stranger = people.findIndex((_, x) => x !== j && x !== i);
+  assert.equal(open(j, build(stranger, "https://push.example/x", people[j].keys.idh)), null);
+  // Lengths, t*, endpoint rules, argument checks.
+  expectCode("INVALID_LENGTH", () => open(j, blob.subarray(1)));
+  expectCode("INVALID_LENGTH", () => open(j, new Uint8Array(L_K + 1)));
+  assert.equal(open(j, new Uint8Array(2 * L_K)), null);
+  expectCode("ATTEMPT_MISMATCH", () => open(j, blob, 0));
+  expectCode("ATTEMPT_MISMATCH", () => build(i, "", undefined, 17));
+  expectCode("INVALID_ARGUMENT", () => open(j, blob, 1.5));
+  expectCode("INVALID_ENCODING", () => build(i, "http://push.example/x"));
+  expectCode("INVALID_LENGTH", () => build(i, "https://" + "a".repeat(ENDPOINT_MAX - 7)));
+  build(i, "https://" + "a".repeat(ENDPOINT_MAX - 8)); // exactly 700 B: ok
+  expectCode("INVALID_LENGTH", () => build(i, "", people[j].keys.idh.subarray(1)));
+  expectCode("NOT_IN_ROSTER", () => build(i, "", people[i].keys.idh));
+  expectCode("STATE_MISMATCH", () =>
+    w.openContacts(people[j].keys, gid, round + 1, roster, evals[j].state, tStar, blob),
+  );
 }
 
 test("complete protocol n=4 (in-memory mailbox)", () => {

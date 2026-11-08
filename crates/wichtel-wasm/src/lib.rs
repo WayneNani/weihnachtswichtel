@@ -14,6 +14,7 @@ mod error;
 mod state;
 
 use wasm_bindgen::prelude::*;
+use wichtel_core::contact::{build_contact, open_contacts};
 use wichtel_core::dcnet::{build_roles_vector, evaluate_roles, own_positions};
 use wichtel_core::gk::{self, GkContext};
 use wichtel_core::keys::{self, ParticipantKeys, UploadKind};
@@ -31,7 +32,7 @@ export type WichtelErrorCode =
   | "INVALID_LENGTH" | "INVALID_KEY" | "BAD_SIGNATURE" | "DECRYPTION_FAILED"
   | "INVALID_ENCODING" | "INVALID_PARTICIPANT_COUNT" | "NOT_IN_ROSTER" | "OWN_ROLE_MISSING"
   | "COLLISION" | "NO_VALID_ATTEMPT" | "ATTEMPT_MISMATCH" | "REVEAL_COUNT" | "RNG_UNAVAILABLE"
-  | "INVALID_ARGUMENT" | "INVALID_STATE" | "STATE_MISMATCH";
+  | "CONTACT_COUNT" | "INVALID_ARGUMENT" | "INVALID_STATE" | "STATE_MISMATCH";
 
 export interface RosterEntryInput {
   pid: Uint8Array;
@@ -130,11 +131,12 @@ impl KeysHandle {
         self.keys.sign_join(enc_name, enc_wish).to_vec()
     }
 
-    /// Spec §12 upload signature (64 B); `kind` 1 = roles, 2 = reveal.
+    /// Spec §12 upload signature (64 B); `kind` 1 = roles, 2 = reveal, 3 = contact (§16.2,
+    /// `round` = round of `Done`).
     #[wasm_bindgen(js_name = signUpload)]
     pub fn sign_upload(
         &self,
-        #[wasm_bindgen(unchecked_param_type = "1 | 2")] kind: f64,
+        #[wasm_bindgen(unchecked_param_type = "1 | 2 | 3")] kind: f64,
         round: f64,
         body: &[u8],
     ) -> Result<Vec<u8>> {
@@ -142,8 +144,10 @@ impl KeysHandle {
             UploadKind::Roles
         } else if kind == 2.0 {
             UploadKind::Reveal
+        } else if kind == 3.0 {
+            UploadKind::Contact
         } else {
-            return Err(WasmError::arg("kind must be 1 or 2"));
+            return Err(WasmError::arg("kind must be 1, 2 or 3"));
         };
         let round = u32_arg(round, "round must be an integer ≥ 0")?;
         Ok(self.keys.sign_upload(kind, round, body).to_vec())
@@ -442,8 +446,7 @@ pub fn open_result_js(
 ) -> Result<JsValue> {
     let a = RoundArgs::parse(gid, round, &roster)?;
     let s = a.state(evaluation_state)?;
-    let t_star = u32_arg(t_star, "tStar must be an integer")?;
-    let t_star = u8::try_from(t_star).map_err(|_| wichtel_core::Error::AttemptMismatch)?;
+    let t_star = t_star_arg(t_star)?;
     let reveals = convert::reveals(&reveals)?;
     let res = open_result(
         &keys.keys, &a.gid, a.round, &a.roster, &s.outcome, &s.own, t_star, &reveals,
@@ -452,4 +455,64 @@ pub fn open_result_js(
         ("recipientPid", bytes(&res.recipient.0)),
         ("note", JsValue::from_str(&res.note)),
     ]))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Contact to the recipient (Spec §16.2)
+// ---------------------------------------------------------------------------------------------
+
+/// `t*` as `u8` (out-of-range values fail like an unusable attempt).
+fn t_star_arg(t_star: f64) -> Result<u8> {
+    let t = u32_arg(t_star, "tStar must be an integer")?;
+    Ok(u8::try_from(t).map_err(|_| wichtel_core::Error::AttemptMismatch)?)
+}
+
+/// Own contact for the recipient (816 B, Spec §16.2). `endpoint` = anonymous push endpoint
+/// (`https://…`, ≤ 700 B) or `""` (no notification). Fresh randomness on every call.
+/// `recipientIdh` = IDH of the recipient from the roster.
+#[wasm_bindgen(js_name = buildContact)]
+#[allow(clippy::too_many_arguments)]
+pub fn build_contact_js(
+    keys: &KeysHandle,
+    gid: &[u8],
+    round: f64,
+    #[wasm_bindgen(unchecked_param_type = "RosterEntryInput[]")] roster: JsValue,
+    evaluation_state: &[u8],
+    t_star: f64,
+    recipient_idh: &[u8],
+    endpoint: &str,
+) -> Result<Vec<u8>> {
+    let a = RoundArgs::parse(gid, round, &roster)?;
+    let s = a.state(evaluation_state)?;
+    let t_star = t_star_arg(t_star)?;
+    let idh = fixed_ref(recipient_idh, "recipientIdh must be 32 bytes")?;
+    Ok(build_contact(
+        &keys.keys, &a.gid, a.round, &a.roster, &s.outcome, &s.own, t_star, idh, endpoint,
+    )?)
+}
+
+/// Open the served contacts (concatenation of 816-B blocks, Spec §16.2): endpoint of the own
+/// giver, or `null` (none uploaded yet, or the giver has push off). Throws `INVALID_LENGTH` for
+/// a length that is not a multiple of 816 and `CONTACT_COUNT` for more than one valid contact.
+#[wasm_bindgen(js_name = openContacts, unchecked_return_type = "string | null")]
+#[allow(clippy::too_many_arguments)]
+pub fn open_contacts_js(
+    keys: &KeysHandle,
+    gid: &[u8],
+    round: f64,
+    #[wasm_bindgen(unchecked_param_type = "RosterEntryInput[]")] roster: JsValue,
+    evaluation_state: &[u8],
+    t_star: f64,
+    contacts: &[u8],
+) -> Result<JsValue> {
+    let a = RoundArgs::parse(gid, round, &roster)?;
+    let s = a.state(evaluation_state)?;
+    let t_star = t_star_arg(t_star)?;
+    let endpoint = open_contacts(
+        &keys.keys, &a.gid, a.round, &a.roster, &s.outcome, &s.own, t_star, contacts,
+    )?;
+    Ok(match endpoint {
+        Some(e) => JsValue::from_str(&e),
+        None => JsValue::NULL,
+    })
 }

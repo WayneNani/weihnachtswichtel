@@ -421,7 +421,16 @@ Uploader→Kontakt geheim halten (sonst erführe das Wichtelkind, wer sein Schen
 
 Öffnen (Teilnehmer `j`, eigene Beschenkten-Position `e_j`): für jeden Kontakt HPKE-Open Mode Auth
 mit `skR = idh_j`, `pkS = GP_{r,t*}[σ_{t*}⁻¹(e_j)]`, gleicher `info`. Genau **null oder einer**
-lässt sich öffnen; Version = 1, Länge ≤ `ENDPOINT_MAX`, Füllbytes = 0, sonst verwerfen.
+lässt sich öffnen; Version = 1, Länge ≤ `ENDPOINT_MAX`, Füllbytes = 0, Endpoint gültiges UTF-8 und
+(falls nicht leer) mit Präfix `https://`, sonst verwerfen. Präzisierungen:
+
+- Die Gesamtlänge der Antwort MUSS ein Vielfaches von `L_K` sein (sonst Fehler); eine leere Antwort
+  bedeutet „kein Kontakt“.
+- Leerer Endpoint und kein gültiger Kontakt sind gleichwertig: keine Benachrichtigung.
+- Bestehen **mehr als ein** Kontakt alle Prüfungen (Server hat nicht ersetzt), ist das ein
+  Fehler (`CONTACT_COUNT`); der Client schickt dann keinen `notify_endpoint`.
+- „Frisch zufällig“ heißt: Ephemeral = `DeriveKeyPair(ikm)` mit 32 Byte `ikm` aus dem CSPRNG
+  (gleichwertig zu `GenerateKeyPair`).
 
 Bei einer Neuverlosung (`draw_no+1`) und beim Löschen der Gruppe MUSS der Server alle Kontakte
 löschen (mit VACUUM-Markierung, §14).
