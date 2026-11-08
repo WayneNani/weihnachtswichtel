@@ -115,4 +115,34 @@ export interface WichtelWasm {
     tStar: number,
     reveals: { pid: Uint8Array; ciphertext: Uint8Array }[],
   ): DrawResultJs;
+
+  /**
+   * Spec §16.2: contact for the own recipient (816 B). `endpoint` = the anonymous push endpoint
+   * of the wish-scope subscription, or "" (no notification). Fresh randomness on every call.
+   * `recipientIdh` = IDH of the recipient from the roster (the pid comes from openResult).
+   */
+  buildContact(
+    keys: ParticipantKeysHandle,
+    gid: Uint8Array,
+    round: number,
+    roster: RosterEntryInput[],
+    evaluationState: Uint8Array,
+    tStar: number,
+    recipientIdh: Uint8Array,
+    endpoint: string,
+  ): Uint8Array;
+
+  /**
+   * Spec §16.2: tries all contacts (concatenation of 816-B blocks as served) and returns the
+   * endpoint from the own Schenker, or null (none uploaded yet, or the Schenker has push off).
+   */
+  openContacts(
+    keys: ParticipantKeysHandle,
+    gid: Uint8Array,
+    round: number,
+    roster: RosterEntryInput[],
+    evaluationState: Uint8Array,
+    tStar: number,
+    contacts: Uint8Array,
+  ): string | null;
 }

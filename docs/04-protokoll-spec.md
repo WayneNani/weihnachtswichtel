@@ -48,6 +48,9 @@ aufgeführt. Die Schlüsselwörter MUSS/DARF NICHT/SOLL sind im Sinne von RFC 21
 | `WISH_MAX` | 1000 | max. Bytes (UTF-8) eines Wunschzettels |
 | `META_MAX` | 2000 | max. Bytes der Gruppen-Metadaten (JSON) |
 | `NOTE_MAX` | 461 | max. Bytes der privaten Notiz (`512 − 1 − 16 − 32 − 2`) |
+| `L_KP` | 768 | Klartextlänge eines Kontakts (§16) |
+| `L_K` | `32 + 768 + 16 = 816` | Länge eines Kontakts (HPKE `enc ‖ ct`) |
+| `ENDPOINT_MAX` | 700 | max. Bytes einer Push-Endpoint-URL im Kontakt |
 
 ## 3. Bezeichner und Geheimnisse
 
@@ -110,7 +113,8 @@ G_r = H("wichtel/v1/G" ‖ gid ‖ u32(r) ‖ u32(n) ‖ entry_0 ‖ … ‖ ent
 
 `r` ist die **Protokollrunde** (global pro Gruppe, beginnt bei 1, steigt bei jeder Kollisions-,
 Fehlversuchs- oder Neuverlosungsrunde). Der Wunschzettel ist nicht Teil von `G_r` (er ist per AAD
-an `pid` gebunden und nach dem Start unveränderlich).
+an `pid` gebunden). Deshalb darf er **jederzeit** geändert werden, auch nach dem Start (§16); der
+Name dagegen nur in `Open`.
 
 ### Fingerabdruck
 
@@ -328,7 +332,8 @@ konstanter Zeit). **Genau eine** Enthüllung MUSS alle Prüfungen bestehen; das 
 
 - `draw_no` (Verlosung Nr.) zählt nur Starts und Neuverlosungen (Admin-Restart, Austritt nach
   Start), **nicht** Kollisions- und Fehlversuchsrunden.
-- Beitreten, Wunschzettel ändern und Termin setzen sind **nur in `Open`** erlaubt.
+- Beitreten, Namen ändern und Termin setzen sind **nur in `Open`** erlaubt. Den **Wunschzettel**
+  darf jeder Teilnehmer in **jedem** Zustand ändern (§16).
 - Austritt/Entfernen in `Drawing` oder `Done` ⇒ Roster ändert sich, sofort `Drawing{r+1, Roles}`
   mit `draw_no+1` (bzw. `Open`, falls danach `n < N_MIN`).
 - `restart` (Admin) aus `Drawing` oder `Done` ⇒ `Drawing{r+1, Roles}`, `draw_no+1`.
@@ -359,14 +364,94 @@ Kein Fehlerfall darf zu einer Nachricht an den Server führen, die die eigene Po
 
 ```
 upload_sig = Ed25519-Sign(isk, H("wichtel/v1/upload" ‖ u8(kind) ‖ gid ‖ u32(r) ‖ pid ‖ H(body)))
-kind: 1 = Rollen-Vektor, 2 = Selbstzug + Enthüllungen
+kind: 1 = Rollen-Vektor, 2 = Selbstzug + Enthüllungen, 3 = Kontakt (§16; r = Runde von Done)
 ```
 
-Der Server MUSS Signatur, Länge (`L_V(n)` bzw. 9216) und Bearer-Token prüfen.
+Der Server MUSS Signatur, Länge (`L_V(n)`, 9216 bzw. `L_K`) und Bearer-Token prüfen.
 
 `ρ` ist bewusst **nicht** Teil der Signatur: Die Upload-Signatur prüft nur der Server selbst, sie
 schützt also nicht gegen einen equivozierenden Server. Die Bindung an `R` erfolgt dort, wo sie
 wirkt: in den Selbstzug-Masken (§7.1), in HPKE-`info` und im Claim-MAC (§9.2).
+
+## 16. Wunschzettel nach dem Start und Hinweis an den Schenker
+
+Ziel: Ein Teilnehmer kann seinen Wunschzettel auch nach der Verlosung ändern, und **nur sein
+Schenker** bekommt eine Benachrichtigung – ohne dass der Server erfährt, wer das ist.
+
+### 16.1 Wunschzettel ändern
+
+`PUT /api/groups/{gid}/participants/{pid}` ist in allen Zuständen erlaubt. In `Drawing` und `Done`
+MUSS `enc_name` byte-identisch zum gespeicherten sein (sonst `409`), nur `enc_wish` und `join_sig`
+ändern sich. `G_r` bleibt unverändert (§5), laufende Runden sind nicht betroffen.
+
+### 16.2 Kontakt an das Wichtelkind
+
+Sobald Teilnehmer `i` in `Done` sein Ergebnis kennt (Beschenkter `j`), lädt er für die aktuelle
+Verlosung **genau einen** Kontakt hoch – **jeder** Teilnehmer, auch ohne Push (dann mit leerem
+Endpoint). So sieht der Server von allen das gleiche Muster.
+
+Klartext (genau `L_KP` = 768 B):
+
+| Offset | Länge | Feld |
+|---|---|---|
+| 0 | 1 | Version = `0x01` |
+| 1 | 2 | `u16(len(endpoint))` |
+| 3 | len | `endpoint` (UTF-8, `https://…`, ≤ `ENDPOINT_MAX`, leer = keine Benachrichtigung) |
+| 3+len | Rest | Null-Bytes |
+
+Verschlüsselung: HPKE, **Mode Auth (0x02)**, gleiche Suite wie §9.2,
+`skS = gp_{r,t*}` (eigene Schenker-Rolle im gewählten Versuch), `pkR = IDH_j`,
+`info = "wichtel/v1/contact" ‖ G_r ‖ ρ ‖ u8(t*)`, `aad = ""`, Ephemeral **frisch zufällig**
+(ein erneuter Upload ersetzt den alten; kein deterministischer Nonce nötig).
+Kontakt `K_i = enc (32) ‖ ct (784)` = `L_K` = 816 B.
+
+- `pkR = IDH_j`: nur das Wichtelkind kann öffnen. HPKE/DHKEM ist key-private: der Server sieht
+  nicht, an wen der Kontakt gerichtet ist.
+- `skS = gp_{r,t*}`: das Wichtelkind prüft beim Öffnen mit `pkS = GP_{r,t*}[σ_{t*}⁻¹(e_j)]`, dass
+  der Kontakt wirklich von **seinem** Schenker kommt (Inhaber der Schenker-Rolle) – ohne dessen
+  Identität zu erfahren. Ein Kontakt von jemand anderem lässt sich nicht öffnen.
+
+Upload: `PUT /api/groups/{gid}/draws/{draw_no}/contact`, Body `K_i`, Signatur kind 3 (§12) mit
+`r` = Runde von `Done`. Nur in `Done` mit aktuellem `draw_no`; ein erneuter Upload **ersetzt** den
+vorigen (z. B. nach dem Einschalten von Push).
+
+Abruf: `GET /api/groups/{gid}/draws/{draw_no}/contacts` liefert **alle** Kontakte als Bytes
+`K_a ‖ K_b ‖ …`, sortiert nach `H(K)` – **ohne** `pid`s. Der Server MUSS die Zuordnung
+Uploader→Kontakt geheim halten (sonst erführe das Wichtelkind, wer sein Schenker ist).
+
+Öffnen (Teilnehmer `j`, eigene Beschenkten-Position `e_j`): für jeden Kontakt HPKE-Open Mode Auth
+mit `skR = idh_j`, `pkS = GP_{r,t*}[σ_{t*}⁻¹(e_j)]`, gleicher `info`. Genau **null oder einer**
+lässt sich öffnen; Version = 1, Länge ≤ `ENDPOINT_MAX`, Füllbytes = 0, sonst verwerfen.
+
+Bei einer Neuverlosung (`draw_no+1`) und beim Löschen der Gruppe MUSS der Server alle Kontakte
+löschen (mit VACUUM-Markierung, §14).
+
+### 16.3 Benachrichtigung auslösen
+
+Ändert `j` in `Done` seinen Wunschzettel, öffnet sein Client die Kontakte. Ist ein Endpoint
+vorhanden, schickt der Client ihn im selben Request mit:
+`PUT …/participants/{pid}` mit zusätzlichem Feld `notify_endpoint`.
+
+Der Server prüft den Endpoint wie ein Push-Abo (HTTPS, erlaubte Push-Dienste), sendet einen
+**inhaltslosen** Push mit VAPID dorthin und **speichert ihn nicht** (auch nicht im Log).
+Rate-Limit: höchstens ein Hinweis pro Teilnehmer alle 10 Minuten (darüber: Wunschzettel wird
+gespeichert, Hinweis entfällt still). Antwort des Push-Dienstes 404/410 wird ignoriert.
+
+### 16.4 Push-Abo für Hinweise
+
+Der Schenker erzeugt für den Kontakt ein **eigenes** Push-Abo in einem eigenen Service-Worker-
+Scope (`/g/<gid>/wish/`), getrennt vom normalen Abo der Runde (`/g/<gid>/`). Dessen Endpoint geht
+**nie** direkt an den Server, nur verschlüsselt im Kontakt. Ein Push an diesen Scope zeigt immer
+den festen Text „🎁 Wichteln: Dein Wichtelkind hat seinen Wunschzettel aktualisiert“.
+
+### 16.5 Was lernt wer?
+
+- **Server**: dass ein Teilnehmer einen Kontakt hochlädt (alle tun das) und dass beim Ändern eines
+  Wunschzettels ein Push an einen ihm sonst unbekannten Endpoint geht – nicht, wem er gehört.
+- **Wichtelkind**: die anonyme Push-Adresse seines Schenkers, aber nicht dessen Identität.
+- **Restrisiko (Timing)**: Öffnet der Schenker direkt nach dem Hinweis die App, könnte ein
+  neugieriger Betreiber den Abruf zeitlich mit dem Push in Verbindung bringen. Der Service Worker
+  lädt beim Empfang nichts nach; das Risiko entsteht nur durch das Verhalten des Menschen.
 
 ## 13. Abweichungen vom Konzept v5
 

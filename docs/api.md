@@ -31,7 +31,9 @@ stehen in `crates/wichtel-api/src/lib.rs`; Protokollinhalte in `docs/04-protokol
 | `POST /api/groups/{gid}/start` | Admin | – → `204` (nur `open`, 4 ≤ n ≤ 30) |
 | `POST /api/groups/{gid}/restart` | Admin | – → `204` (nur `drawing`/`done`; neue Verlosung) |
 | `POST /api/groups/{gid}/participants` | – | `JoinRequest` → `201 JoinResponse` (nur `open`, n < 30) |
-| `PUT /api/groups/{gid}/participants/{pid}` | Teilnehmer | `JoinRequest` (gleiche Schlüssel, neue `enc_name`/`enc_wish`/`join_sig`) → `204` (nur `open`) |
+| `PUT /api/groups/{gid}/participants/{pid}` | Teilnehmer | `UpdateParticipantRequest` (gleiche Schlüssel, neue `enc_wish`/`join_sig`; `enc_name` nur in `open` änderbar; optional `notify_endpoint`, nur in `done`) → `204` (Spec §16) |
+| `PUT /api/groups/{gid}/draws/{d}/contact` | Teilnehmer | Bytes `K_i` (816 B) + Signatur-Header (kind 3) → `204` (nur `done`, aktuelles `draw_no`; ersetzt) |
+| `GET /api/groups/{gid}/draws/{d}/contacts` | – | → Bytes `K_a ‖ K_b ‖ …` (sortiert nach Hash, ohne pids) |
 | `DELETE /api/groups/{gid}/participants/{pid}` | Admin oder Teilnehmer selbst | → `204`; in `drawing`/`done` ⇒ Neuverlosung (Spec §10) |
 | `PUT /api/groups/{gid}/rounds/{r}/roles` | Teilnehmer | Bytes `V_i` (`2688·n²` B) + Signatur-Header → `204` |
 | `GET /api/groups/{gid}/rounds/{r}/roles` | – | → Bytes `R`; `409`, solange unvollständig |
