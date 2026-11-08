@@ -137,9 +137,23 @@ pub fn fake_upload_sig(
     round: u32,
     body: &[u8],
 ) -> [u8; 64] {
+    fake_upload_sig_byte(gid, pid, ipk, kind as u8, round, body)
+}
+
+/// Kind byte of a contact upload (Spec §12).
+pub const KIND_CONTACT: u8 = 3;
+
+pub fn fake_upload_sig_byte(
+    gid: &[u8; 16],
+    pid: &[u8; 16],
+    ipk: &[u8; 32],
+    kind: u8,
+    round: u32,
+    body: &[u8],
+) -> [u8; 64] {
     let h = sha(&[
         b"fake-upload",
-        &[kind as u8],
+        &[kind],
         gid,
         &round.to_be_bytes(),
         pid,
@@ -193,6 +207,17 @@ impl ProtocolOps for FakeOps {
         sig: &[u8; 64],
     ) -> bool {
         *sig == fake_upload_sig(gid, pid, ipk, kind, round, body)
+    }
+    fn verify_contact_upload(
+        &self,
+        gid: &[u8; 16],
+        pid: &[u8; 16],
+        ipk: &[u8; 32],
+        round: u32,
+        body: &[u8],
+        sig: &[u8; 64],
+    ) -> bool {
+        *sig == fake_upload_sig_byte(gid, pid, ipk, KIND_CONTACT, round, body)
     }
     fn xor_into(&self, acc: &mut [u8], src: &[u8]) -> bool {
         if acc.len() != src.len() {
@@ -457,6 +482,11 @@ impl FakeClient {
 
     pub fn sig(&self, gid: &[u8; 16], kind: UploadKind, round: u32, body: &[u8]) -> [u8; 64] {
         fake_upload_sig(gid, &self.pid, &self.ipk, kind, round, body)
+    }
+
+    /// Kind-3 signature of a contact upload (`round` = round of `Done`).
+    pub fn contact_sig(&self, gid: &[u8; 16], round: u32, body: &[u8]) -> [u8; 64] {
+        fake_upload_sig_byte(gid, &self.pid, &self.ipk, KIND_CONTACT, round, body)
     }
 }
 

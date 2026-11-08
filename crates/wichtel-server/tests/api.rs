@@ -343,7 +343,7 @@ async fn join_rules() {
 }
 
 #[tokio::test]
-async fn update_participant_before_start_only() {
+async fn update_participant_name_before_start_only() {
     let t = TestApp::new().await;
     let (g, cs) = group_with(&t, 4).await;
     let mut a = cs[0].clone();
@@ -387,9 +387,21 @@ async fn update_participant_before_start_only() {
     assert_eq!(unb64(me["enc_name"].as_str().unwrap()), vec![0xAB; 50]);
     assert_eq!(me["enc_wish"], "");
 
+    // Spec §16.1: after the start only the wish list may change.
     start(&t, &g).await;
     let r = t
         .json(Method::PUT, &url, Some(&a.tok), &a.join_request(&g.gid))
+        .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    let mut renamed = a.clone();
+    renamed.enc_name = vec![0xAC; 50];
+    let r = t
+        .json(
+            Method::PUT,
+            &url,
+            Some(&a.tok),
+            &renamed.join_request(&g.gid),
+        )
         .await;
     assert_eq!(r.status, StatusCode::CONFLICT);
 }

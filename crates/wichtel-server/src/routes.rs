@@ -25,7 +25,7 @@ use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 use wichtel_api::{
     CONTENT_TYPE_BINARY, CreateGroupRequest, CreateGroupResponse, ErrorCode, Fixed, GroupView,
     HEADER_SIGNATURE, JoinRequest, JoinResponse, Phase, PushSubscriptionRequest, RevealRelease,
-    ScheduleRequest, UpdateEvent, VapidKeyResponse,
+    ScheduleRequest, UpdateEvent, UpdateParticipantRequest, VapidKeyResponse,
 };
 use wichtel_core::{N_MAX, roles_vector_len};
 
@@ -75,6 +75,8 @@ pub fn router(app: Arc<App>) -> Router {
             "/api/groups/{gid}/rounds/{r}/reveal",
             put(upload_reveal).get(get_reveal),
         )
+        .route("/api/groups/{gid}/draws/{d}/contact", put(upload_contact))
+        .route("/api/groups/{gid}/draws/{d}/contacts", get(get_contacts))
         .route("/api/groups/{gid}/events", get(events))
         .layer(DefaultBodyLimit::max(JSON_LIMIT))
         .fallback(web::static_handler)
@@ -209,6 +211,12 @@ async fn authorized_upload(
     let expected = app
         .upload_precheck(*gid, round, phase, bearer(headers).as_ref())
         .await?;
+    read_upload(headers, body, expected).await
+}
+
+/// Second half of an authorized upload: signature header present, `Content-Length` matches
+/// `expected`, then read at most `expected` bytes.
+async fn read_upload(headers: &HeaderMap, body: Body, expected: usize) -> ApiResult<Bytes> {
     if signature(headers)?.is_none() {
         return Err(ApiError::bad_request("missing upload signature"));
     }
@@ -335,7 +343,7 @@ async fn update_participant(
     State(app): AppState,
     Params((gid, pid)): Params<(String, String)>,
     headers: HeaderMap,
-    JsonBody(req): JsonBody<JoinRequest>,
+    JsonBody(req): JsonBody<UpdateParticipantRequest>,
 ) -> ApiResult<StatusCode> {
     app.update_participant(parse_id(&gid)?, parse_id(&pid)?, bearer(&headers), req)
         .await?;
@@ -425,6 +433,39 @@ async fn get_reveal(
     let gid = parse_id(&gid)?;
     app.limit_download(ip)?;
     Ok(Json(app.reveal_release(gid, r).await?))
+}
+
+async fn upload_contact(
+    State(app): AppState,
+    Params((gid, d)): Params<(String, u32)>,
+    headers: HeaderMap,
+    body: Body,
+) -> ApiResult<StatusCode> {
+    let gid = parse_id(&gid)?;
+    let expected = app
+        .contact_precheck(gid, d, bearer(&headers).as_ref())
+        .await?;
+    let body = read_upload(&headers, body, expected).await?;
+    let sig = signature(&headers)?;
+    app.upload_contact(gid, d, bearer(&headers), sig, &body)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_contacts(
+    State(app): AppState,
+    ClientIp(ip): ClientIp,
+    Params((gid, d)): Params<(String, u32)>,
+) -> ApiResult<Response> {
+    let gid = parse_id(&gid)?;
+    app.limit_download(ip)?;
+    let data = app.contacts(gid, d).await?;
+    let mut res = Response::new(axum::body::Body::from(data));
+    res.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(CONTENT_TYPE_BINARY),
+    );
+    Ok(res)
 }
 
 fn sse_event(ev: &UpdateEvent) -> Event {

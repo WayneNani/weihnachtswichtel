@@ -120,6 +120,51 @@ Content-Type: application/json
 { "pid": "AQEBAQEBAQEBAQEBAQEBAQ" }
 ```
 
+### Wunschzettel ändern (Spec §16.1, §16.3)
+
+```http
+PUT /api/groups/3q2-7wAAAAAAAAAAAAAAAA/participants/AQEBAQEBAQEBAQEBAQEBAQ
+Authorization: Bearer <base64url(tok)>
+Content-Type: application/json
+
+{
+  "ipk": "…", "idh": "…", "auth_hash": "…",
+  "enc_name": "…unverändert…", "enc_wish": "…neu…",
+  "join_sig": "…64 B…",
+  "notify_endpoint": "https://fcm.googleapis.com/fcm/send/def…"
+}
+```
+
+→ `204`. In `drawing`/`done` muss `enc_name` byte-identisch zum gespeicherten sein, sonst `409`.
+Die Änderung erzeugt nur ein SSE-Ereignis (offene Seiten laden neu), **keinen** Gruppen-Push.
+`notify_endpoint` (optional) ist der Push-Endpoint des eigenen Schenkers aus dessen Kontakt: Nur in
+`done` sendet der Server **einen** leeren VAPID-Push dorthin, höchstens einmal pro Teilnehmer in
+10 Minuten, und speichert/loggt den Endpoint nicht. Ist er ungültig (kein HTTPS, Host nicht in
+`WICHTEL_PUSH_HOSTS`, > 700 B), außerhalb von `done` oder über dem Limit, entfällt der Hinweis
+**still**; der Wunschzettel wird trotzdem gespeichert (`204`).
+
+### Kontakt hochladen und abrufen (Spec §16.2)
+
+```http
+PUT /api/groups/3q2-7wAAAAAAAAAAAAAAAA/draws/1/contact
+Authorization: Bearer <base64url(tok)>
+X-Wichtel-Signature: <base64url(upload_sig, kind 3, r = Runde von done)>
+Content-Type: application/octet-stream
+
+<816 Bytes K_i>
+```
+
+→ `204`; ersetzt einen früheren Kontakt desselben Teilnehmers. Nur in `done` mit aktuellem
+`draw_no` (sonst `409`).
+
+```http
+GET /api/groups/3q2-7wAAAAAAAAAAAAAAAA/draws/1/contacts
+```
+
+→ `200`, `application/octet-stream`: `K_a ‖ K_b ‖ …` (je 816 B), sortiert nach `SHA-256(K)`,
+ohne `pid`s. Bei einer Neuverlosung, beim Austritt nach dem Start und beim Löschen der Gruppe
+werden alle Kontakte gelöscht.
+
 ### Termin setzen
 
 ```http
@@ -189,19 +234,21 @@ Der Server sendet Pushes **ohne Inhalt** (leerer Body, `TTL: 3600`, VAPID-JWT ES
 | `enc_wish` | ≤ 1100 B |
 | Rollen-Vektor | genau `2688·n²` B (≤ 2,42 MB) |
 | Schritt-2-Upload | genau 9216 B |
-| Uploads (Rollen, Schritt 2) | Token, Zustand, Runde und `Content-Length` werden **vor** dem Lesen des Bodys geprüft (`401`/`409`/`413`/`400`); höchstens die erwartete Länge wird gelesen |
+| Kontakt | genau 816 B |
+| Uploads (Rollen, Schritt 2, Kontakt) | Token, Zustand, Runde und `Content-Length` werden **vor** dem Lesen des Bodys geprüft (`401`/`409`/`413`/`400`); höchstens die erwartete Länge wird gelesen |
 | Gruppen-Erstellung | Rate-Limit pro IPv4-Adresse bzw. IPv6-/48 (nur im RAM), 10/h; zusätzlich global 500/h |
 | Beitritte | 120/h pro IP (IPv6: /64) |
-| `GET …/roles`, `GET …/reveal` | 300/h pro IP (IPv6: /64) |
+| `GET …/roles`, `GET …/reveal`, `GET …/contacts` | 300/h pro IP (IPv6: /64), gemeinsam |
 | SSE-Verbindungen | 100 pro Gruppe, 40 pro IP (IPv6: /64), 2000 insgesamt (`429`) |
 | Gleichzeitige Anfragen | 256; darüber `503` mit `Retry-After: 5` |
 | Zeitlimits | 120 s pro Anfrage (`408`), 30 s Pause im Request-Body (`400`) |
 | Leere Gruppen | ohne Teilnehmer nach 24 h ohne Aktivität gelöscht; mit < 4 Teilnehmern und ohne Termin nach 7 Tagen |
 | Push | höchstens ein Push pro Gruppe und Minute; Änderungen dazwischen werden zu einem Push zusammengefasst |
 | Push-Endpoint | HTTPS-URL, ≤ 1024 Zeichen, Host aus `WICHTEL_PUSH_HOSTS` (keine Platzhalter) |
+| `notify_endpoint` | wie Push-Endpoint, aber ≤ 700 B; höchstens 1 Hinweis pro Teilnehmer und 10 min (nur im RAM) |
 
 ## Abweichung vom Konzept §7.2
 
 Pfad `…/rounds/{r}/dcnet` heißt hier `…/rounds/{r}/roles`. `…/rounds/{r}/next` entfällt (Server
-erkennt Kollisionen selbst, Spec §13). Neu: `PUT …/participants/{pid}` (Name/Wunschzettel vor dem
-Start ändern).
+erkennt Kollisionen selbst, Spec §13). Neu: `PUT …/participants/{pid}` (Name vor dem Start,
+Wunschzettel jederzeit ändern) sowie `…/draws/{d}/contact(s)` (Spec §16).
