@@ -12,7 +12,10 @@ use super::{
 };
 
 /// SQL migrations, applied in order; the index + 1 is the schema version.
-const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_init.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../../migrations/0001_init.sql"),
+    include_str!("../../migrations/0002_contacts.sql"),
+];
 
 /// `server_keys` row written together with every destructive commit and removed by
 /// [`Store::vacuum`]: a pending `VACUUM` survives a crash or restart.
@@ -132,6 +135,7 @@ async fn apply(conn: &Connection, op: WriteOp) -> Result<(), turso::Error> {
         }
         WriteOp::DeleteGroup(gid) => {
             for table in [
+                "contacts",
                 "reveal_uploads",
                 "round_aggregates",
                 "push_subscriptions",
@@ -236,10 +240,28 @@ async fn apply(conn: &Connection, op: WriteOp) -> Result<(), turso::Error> {
             .await?;
         }
         WriteOp::ClearRounds { gid } => {
-            for table in ["reveal_uploads", "round_aggregates"] {
+            for table in ["reveal_uploads", "round_aggregates", "contacts"] {
                 conn.execute(format!("DELETE FROM {table} WHERE gid = ?1"), [blob(&gid)])
                     .await?;
             }
+        }
+        WriteOp::PutContact {
+            gid,
+            pid,
+            draw_no,
+            contact,
+        } => {
+            conn.execute(
+                "INSERT OR REPLACE INTO contacts (gid, pid, draw_no, contact) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                vec![
+                    blob(&gid),
+                    blob(&pid),
+                    Value::Integer(draw_no.into()),
+                    Value::Blob(contact),
+                ],
+            )
+            .await?;
         }
         WriteOp::PutPushSub(s) => {
             conn.execute(
@@ -484,6 +506,31 @@ impl Store for TursoStore {
                 .query_all(
                     "SELECT count(*) FROM reveal_uploads WHERE gid = ?1 AND round = ?2",
                     vec![blob(gid), Value::Integer(round.into())],
+                )
+                .await?;
+            let n = rows.first().map(|r| int(&r[0])).transpose()?.unwrap_or(0);
+            Ok(n.max(0) as u64)
+        })
+    }
+
+    fn list_contacts<'a>(&'a self, gid: &'a Gid, draw_no: u32) -> StoreFuture<'a, Vec<Vec<u8>>> {
+        Box::pin(async move {
+            let rows = self
+                .query_all(
+                    "SELECT contact FROM contacts WHERE gid = ?1 AND draw_no = ?2",
+                    vec![blob(gid), Value::Integer(draw_no.into())],
+                )
+                .await?;
+            rows.iter().map(|v| bytes(&v[0])).collect()
+        })
+    }
+
+    fn count_contacts<'a>(&'a self, gid: &'a Gid) -> StoreFuture<'a, u64> {
+        Box::pin(async move {
+            let rows = self
+                .query_all(
+                    "SELECT count(*) FROM contacts WHERE gid = ?1",
+                    vec![blob(gid)],
                 )
                 .await?;
             let n = rows.first().map(|r| int(&r[0])).transpose()?.unwrap_or(0);

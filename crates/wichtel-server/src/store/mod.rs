@@ -127,9 +127,17 @@ pub enum WriteOp {
         round: u32,
         attempt: u8,
     },
-    /// Delete all aggregates and reveal ciphertexts of the group (all rounds).
+    /// Delete all aggregates, reveal ciphertexts and contacts of the group (all rounds and
+    /// draws).
     ClearRounds {
         gid: Gid,
+    },
+    /// Insert or replace the contact `K_pid` of the current draw (Spec §16.2).
+    PutContact {
+        gid: Gid,
+        pid: Pid,
+        draw_no: u32,
+        contact: Vec<u8>,
     },
     PutPushSub(PushSubRecord),
     DeletePushSub {
@@ -164,6 +172,8 @@ impl WriteOp {
             | WriteOp::PutAggregate(_)
             | WriteOp::KeepOnlyAttempt { .. }
             | WriteOp::ClearRounds { .. }
+            // May replace an earlier contact of the same participant.
+            | WriteOp::PutContact { .. }
             | WriteOp::PutPushSub(_)
             | WriteOp::DeletePushSub { .. }
             | WriteOp::DeletePushSubIfEndpoint { .. } => true,
@@ -202,6 +212,10 @@ pub trait Store: Send + Sync + 'static {
     ) -> StoreFuture<'a, Vec<(Pid, Vec<u8>)>>;
     /// Number of stored reveal ciphertexts of a round (all attempts).
     fn count_reveals<'a>(&'a self, gid: &'a Gid, round: u32) -> StoreFuture<'a, u64>;
+    /// All contacts of draw `draw_no`, without pids (any order; the caller sorts by hash).
+    fn list_contacts<'a>(&'a self, gid: &'a Gid, draw_no: u32) -> StoreFuture<'a, Vec<Vec<u8>>>;
+    /// Number of stored contacts of the group (all draws).
+    fn count_contacts<'a>(&'a self, gid: &'a Gid) -> StoreFuture<'a, u64>;
     fn list_push_subs<'a>(&'a self, gid: &'a Gid) -> StoreFuture<'a, Vec<PushSubRecord>>;
     fn get_server_key<'a>(&'a self, name: &'a str) -> StoreFuture<'a, Option<Vec<u8>>>;
 

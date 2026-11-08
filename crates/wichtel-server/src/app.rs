@@ -11,6 +11,7 @@ use tokio::sync::{OwnedMutexGuard, Semaphore};
 use wichtel_api::{
     CreateGroupRequest, ErrorCode, GroupState, GroupView, JoinRequest, ParticipantView, Phase,
     Progress, PushSubscriptionRequest, RevealEntry, RevealRelease, UpdateEvent,
+    UpdateParticipantRequest,
 };
 use wichtel_core::keys::UploadKind;
 use wichtel_core::roster::RosterEntry;
@@ -20,7 +21,9 @@ use crate::config::Config;
 use crate::error::{ApiError, ApiResult};
 use crate::events::{Hub, Refused, SseLimits, Subscription};
 use crate::protocol::ProtocolOps;
-use crate::push::{PushClient, PushDispatcher, PushWorker, Vapid, validate_endpoint};
+use crate::push::{
+    PUSH_TTL, PushClient, PushDispatcher, PushMessage, PushWorker, Vapid, validate_endpoint,
+};
 use crate::ratelimit::{Bucket, RateLimiter};
 use crate::store::{
     AggregateRecord, Gid, GroupRecord, ParticipantRecord, Pid, PushSubRecord, Store, StoreError,
@@ -41,6 +44,12 @@ pub const IDLE_LIFETIME: i64 = 7 * 86_400;
 pub const EMPTY_LIFETIME: i64 = 86_400;
 /// Reminder push this many seconds before `draw_at` (Konzept §6.6).
 pub const REMINDER_LEAD: i64 = 600;
+/// Length of a contact `K_i` (Spec §2 `L_K` = 32 + 768 + 16).
+pub const L_CONTACT: usize = 816;
+/// Maximum length of a giver's push endpoint (Spec §2 `ENDPOINT_MAX`).
+pub const ENDPOINT_MAX: usize = 700;
+/// At most one giver notification per participant in this many seconds (Spec §16.3).
+pub const NOTIFY_INTERVAL: i64 = 600;
 const RATE_WINDOW: i64 = 3600;
 
 /// Source of the current time (Unix seconds); replaceable in tests.
@@ -104,6 +113,10 @@ pub struct App {
     /// Permits for concurrently processed requests (`max_concurrent_requests`).
     pub inflight: Arc<Semaphore>,
     push: PushDispatcher,
+    /// For single giver notifications (Spec §16.3), outside the group fan-out.
+    push_client: Arc<dyn PushClient>,
+    /// Last giver notification per `(gid, pid)` (only in RAM; never the endpoint).
+    notified: Mutex<HashMap<(Gid, Pid), i64>>,
     locks: GroupLocks,
     rate: RateLimiter,
     vacuum: VacuumState,
@@ -131,7 +144,7 @@ impl App {
         let push = PushDispatcher::spawn(PushWorker {
             store: store.clone(),
             vapid: vapid.clone(),
-            client: push_client,
+            client: push_client.clone(),
             clock: clock.clone(),
             min_interval: cfg.push_min_interval,
             vacuum_pending: vacuum.pending.clone(),
@@ -145,6 +158,8 @@ impl App {
             hub: Hub::default(),
             vapid,
             push,
+            push_client,
+            notified: Mutex::default(),
             locks: GroupLocks::default(),
             rate: RateLimiter::default(),
             vacuum,
@@ -620,14 +635,18 @@ impl App {
         Ok(pid)
     }
 
+    /// Change name and wish list (Spec §16.1). Allowed in every state; after the start the
+    /// name (and thus `G_r`) must stay byte-identical. In `done` an optional `notify_endpoint`
+    /// triggers one empty push to the participant's giver (Spec §16.3).
     pub async fn update_participant(
         &self,
         gid: Gid,
         pid: Pid,
         token: Option<[u8; 32]>,
-        req: JoinRequest,
+        req: UpdateParticipantRequest,
     ) -> ApiResult<()> {
-        Self::check_join_sizes(&req)?;
+        let join = req.join_fields();
+        Self::check_join_sizes(&join)?;
         let token = token.ok_or_else(ApiError::unauthorized)?;
         let _guard = self.locks.lock(gid).await;
         let mut g = self.load_group(&gid).await?;
@@ -639,13 +658,15 @@ impl App {
         if !self.is_participant(me, &token) {
             return Err(ApiError::unauthorized());
         }
-        if g.state != GroupState::Open {
-            return Err(ApiError::conflict("draw already started"));
-        }
-        if req.ipk.0 != me.ipk || req.idh.0 != me.idh || req.auth_hash.0 != me.auth_hash {
+        if join.ipk.0 != me.ipk || join.idh.0 != me.idh || join.auth_hash.0 != me.auth_hash {
             return Err(ApiError::bad_request("keys must not change"));
         }
-        if self.verify_join(&gid, &req)? != pid {
+        if g.state != GroupState::Open && join.enc_name.0 != me.enc_name {
+            return Err(ApiError::conflict(
+                "name can only be changed before the draw",
+            ));
+        }
+        if self.verify_join(&gid, &join)? != pid {
             return Err(ApiError::bad_request("pid mismatch"));
         }
         g.last_activity = self.now();
@@ -654,16 +675,56 @@ impl App {
                 WriteOp::UpdateParticipantData {
                     gid,
                     pid,
-                    enc_name: req.enc_name.0,
-                    enc_wish: req.enc_wish.0,
+                    enc_name: join.enc_name.0,
+                    enc_wish: join.enc_wish.0,
                 },
                 WriteOp::UpsertGroup(g.clone()),
             ])
             .await?;
         // The old name/wish ciphertexts may survive in free space until VACUUM.
         self.mark_vacuum();
-        self.emit(&g, parts.len(), 0, false);
+        // SSE only, so open pages refresh; no group push (everybody would be notified).
+        let submitted = self.submitted(&g).await?.len();
+        self.emit(&g, parts.len(), submitted, false);
+        if let (GroupState::Done { .. }, Some(endpoint)) = (g.state, req.notify_endpoint) {
+            self.notify_giver(gid, pid, endpoint);
+        }
         Ok(())
+    }
+
+    /// Spec §16.3: one empty VAPID push to the giver's endpoint taken from the contact. The
+    /// endpoint is checked like a subscription (HTTPS, allowed push service, ≤ `ENDPOINT_MAX`),
+    /// is neither stored nor logged, and at most one notification per participant and
+    /// [`NOTIFY_INTERVAL`] is sent. Everything else is dropped silently: the request still
+    /// succeeds, so the response tells nothing about the contact.
+    fn notify_giver(&self, gid: Gid, pid: Pid, endpoint: String) {
+        if endpoint.len() > ENDPOINT_MAX {
+            return;
+        }
+        let Ok(url) = validate_endpoint(&endpoint, &self.cfg.push_hosts) else {
+            return;
+        };
+        let now = self.now();
+        {
+            let mut last = self.notified.lock().expect("notify lock");
+            if last
+                .get(&(gid, pid))
+                .is_some_and(|&t| now - t < NOTIFY_INTERVAL)
+            {
+                return;
+            }
+            last.insert((gid, pid), now);
+        }
+        let msg = PushMessage {
+            authorization: self.vapid.authorization(&url, now),
+            endpoint,
+            ttl: PUSH_TTL,
+        };
+        let client = self.push_client.clone();
+        // Best effort; 404/410 is ignored (nothing stored that could be deleted).
+        tokio::spawn(async move {
+            let _ = client.send(msg).await;
+        });
     }
 
     /// Leave (self) or remove (admin). After the start this triggers a new draw (Konzept §6.4).
@@ -737,7 +798,87 @@ impl App {
         })
     }
 
-    /// Rate limit for the large public downloads (`R`, reveal release).
+    /// Round of `Done` if contacts of draw `draw_no` are accepted/served (Spec §16.2).
+    fn contact_round(g: &GroupRecord, draw_no: u32) -> ApiResult<u32> {
+        match g.state {
+            GroupState::Done { round, .. } if g.draw_no == draw_no => Ok(round),
+            _ => Err(ApiError::conflict("no contacts for this draw")),
+        }
+    }
+
+    /// Like [`App::upload_precheck`] for a contact: token, state `done` and current `draw_no`.
+    /// Returns the exact body length.
+    pub async fn contact_precheck(
+        &self,
+        gid: Gid,
+        draw_no: u32,
+        token: Option<&[u8; 32]>,
+    ) -> ApiResult<usize> {
+        let token = token.ok_or_else(ApiError::unauthorized)?;
+        let g = self.load_group(&gid).await?;
+        let parts = self.store.list_participants(&gid).await?;
+        self.find_by_token(&parts, token)
+            .ok_or_else(ApiError::unauthorized)?;
+        Self::contact_round(&g, draw_no)?;
+        Ok(L_CONTACT)
+    }
+
+    /// Store (or replace) the uploader's contact `K_i` of the current draw (Spec §16.2).
+    /// Nothing about the uploader is logged or returned.
+    pub async fn upload_contact(
+        &self,
+        gid: Gid,
+        draw_no: u32,
+        token: Option<[u8; 32]>,
+        sig: Option<[u8; 64]>,
+        body: &[u8],
+    ) -> ApiResult<()> {
+        let token = token.ok_or_else(ApiError::unauthorized)?;
+        let sig = sig.ok_or(ApiError::bad_request("missing upload signature"))?;
+        let _guard = self.locks.lock(gid).await;
+        let g = self.load_group(&gid).await?;
+        let parts = self.store.list_participants(&gid).await?;
+        let me = self
+            .find_by_token(&parts, &token)
+            .map(|i| &parts[i])
+            .ok_or_else(ApiError::unauthorized)?;
+        let round = Self::contact_round(&g, draw_no)?;
+        if body.len() != L_CONTACT {
+            return Err(ApiError::bad_request("wrong contact length"));
+        }
+        if !self
+            .ops
+            .verify_contact_upload(&gid, &me.pid, &me.ipk, round, body, &sig)
+        {
+            return Err(ApiError::new(
+                ErrorCode::Unauthorized,
+                "invalid upload signature",
+            ));
+        }
+        self.store
+            .commit(vec![WriteOp::PutContact {
+                gid,
+                pid: me.pid,
+                draw_no,
+                contact: body.to_vec(),
+            }])
+            .await?;
+        // A replaced contact may survive in free space until VACUUM.
+        self.mark_vacuum();
+        Ok(())
+    }
+
+    /// All contacts of the current draw, concatenated and sorted by `H(K)`, without pids
+    /// (Spec §16.2).
+    pub async fn contacts(&self, gid: Gid, draw_no: u32) -> ApiResult<Vec<u8>> {
+        let g = self.load_group(&gid).await?;
+        Self::contact_round(&g, draw_no)?;
+        let mut contacts = self.store.list_contacts(&gid, draw_no).await?;
+        contacts.sort_by_cached_key(|k| <[u8; 32]>::from(Sha256::digest(k)));
+        Ok(contacts.concat())
+    }
+
+    /// Rate limit for the large public downloads (`R`, reveal release, contacts).
     pub fn limit_download(&self, ip: Option<IpAddr>) -> ApiResult<()> {
         self.rate_limit(ip, Bucket::Download, self.cfg.download_limit_per_hour)
     }
@@ -1079,6 +1220,11 @@ impl App {
         self.hub.cleanup();
         self.locks.cleanup();
         self.rate.cleanup(self.now(), RATE_WINDOW);
+        let now = self.now();
+        self.notified
+            .lock()
+            .expect("notify lock")
+            .retain(|_, t| now - *t < NOTIFY_INTERVAL);
     }
 
     /// Start due draws (`n < N_MIN` ⇒ `schedule_missed`) and send 10-minute reminders.
