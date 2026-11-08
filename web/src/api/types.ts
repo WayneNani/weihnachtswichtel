@@ -61,6 +61,15 @@ export interface JoinRequest {
   join_sig: B64;
 }
 
+/**
+ * `PUT …/participants/{pid}` (Spec §16.1): like `JoinRequest`; after the start `enc_name` must be
+ * byte-identical to the stored one. `notify_endpoint` (only in `done`, §16.3): anonymous push
+ * endpoint of the own Schenker from the contacts – the server pushes once and does not store it.
+ */
+export interface UpdateParticipantRequest extends JoinRequest {
+  notify_endpoint?: string;
+}
+
 export interface JoinResponse {
   pid: B64;
 }
@@ -130,3 +139,6 @@ export const rolesVectorLen = (n: number): number => 2688 * n * n;
 export const REVEAL_UPLOAD_LEN = 9216;
 export const REVEAL_CT_LEN = 560;
 export const SELFDRAW_LEN = 256;
+/** Spec §16.2: contact `K_i` (HPKE enc ‖ ct) and max. endpoint bytes inside it. */
+export const CONTACT_LEN = 816;
+export const ENDPOINT_MAX = 700;

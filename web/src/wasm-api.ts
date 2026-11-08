@@ -14,8 +14,8 @@ export interface ParticipantKeysHandle {
   readonly authToken: Uint8Array; // 32 B
   /** Spec §5 join signature. */
   signJoin(encName: Uint8Array, encWish: Uint8Array): Uint8Array; // 64 B
-  /** Spec §12; kind 1 = roles, 2 = reveal. */
-  signUpload(kind: 1 | 2, round: number, body: Uint8Array): Uint8Array; // 64 B
+  /** Spec §12; kind 1 = roles, 2 = reveal, 3 = contact (§16.2, round = round of Done). */
+  signUpload(kind: 1 | 2 | 3, round: number, body: Uint8Array): Uint8Array; // 64 B
   free(): void;
 }
 

@@ -8,13 +8,15 @@
  */
 import type {
   GroupView,
+  UpdateParticipantRequest,
   ParticipantView,
   Phase,
   PushSubscriptionRequest,
   RevealRelease,
   UpdateEvent,
 } from "../api/types";
-import { b64uDecode, b64uDecodeLen, b64uEncode, bytesEqual, compareBytes, fromUtf8, utf8 } from "../lib/bytes";
+import { b64uDecode, b64uDecodeLen, b64uEncode, bytesEqual, compareBytes, concat, fromUtf8, utf8 } from "../lib/bytes";
+import { sha256 } from "../lib/sha256";
 import {
   adminHash as computeAdminHash,
   authHash,
@@ -49,6 +51,8 @@ interface Participant {
   encName: string;
   encWish: string;
   joinedAt: number;
+  /** Unix seconds of the last wish-change hint (Spec §16.3 rate limit). */
+  lastNotify: number;
 }
 
 interface Group {
@@ -73,6 +77,8 @@ interface Group {
   revealUploads: Map<string, Uint8Array>;
   releases: Map<number, RevealRelease>;
   push: Map<string, PushSubscriptionRequest>;
+  /** Spec §16.2: contacts of the current draw by uploader (never served with pids). */
+  contacts: Map<string, Uint8Array>;
 }
 
 export interface MockServerOptions {
@@ -83,6 +89,8 @@ export interface MockServerOptions {
   random?: () => number;
   /** Called for every push subscription on a state change (payload-less push). */
   onPush?: (sub: PushSubscriptionRequest) => void;
+  /** Called with the `notify_endpoint` of a wish change in done (payload-less push, not stored). */
+  onNotify?: (endpoint: string) => void;
   /** Uncompressed P-256 public key for `GET /api/push/vapid-key`. */
   vapidPublicKey?: Uint8Array;
   /** Log function for state changes (no secrets are ever logged; there are none server-side). */
@@ -125,6 +133,7 @@ export class MockServer {
   private collisionRate: number;
   private random: () => number;
   private onPush: (sub: PushSubscriptionRequest) => void;
+  private onNotify: (endpoint: string) => void;
   private log: (msg: string) => void;
   vapidPublicKey: Uint8Array;
 
@@ -133,6 +142,7 @@ export class MockServer {
     this.collisionRate = opts.collisionRate ?? 0;
     this.random = opts.random ?? Math.random;
     this.onPush = opts.onPush ?? (() => {});
+    this.onNotify = opts.onNotify ?? (() => {});
     this.log = opts.log ?? (() => {});
     this.vapidPublicKey = opts.vapidPublicKey ?? new Uint8Array([4, ...new Uint8Array(64).fill(7)]);
   }
@@ -153,10 +163,12 @@ export class MockServer {
     return this.groups.has(gidB64);
   }
 
-  private changed(g: Group): void {
+  /** `push = false`: live update for open pages only (e.g. a wish changed after the start). */
+  private changed(g: Group, push = true): void {
     const ev = this.updateEvent(g);
     this.log(`[${g.gidB64.slice(0, 6)}] ${ev.state}${"round" in ev ? ` r=${ev.round}` : ""}${"phase" in ev ? ` ${ev.phase}` : ""} draw_no=${g.drawNo} ${ev.submitted_count}/${ev.participant_count}`);
     for (const cb of this.listeners.get(g.gidB64) ?? []) cb(ev);
+    if (!push) return;
     for (const sub of g.push.values()) {
       try {
         this.onPush(sub);
@@ -282,6 +294,18 @@ export class MockServer {
         return empty();
       }
     }
+    if ((r = /^\/api\/groups\/([^/]+)\/draws\/(\d+)\/contacts?$/.exec(path))) {
+      const g = this.group(r[1]!);
+      const drawNo = Number(r[2]);
+      const many = path.endsWith("/contacts");
+      if (!many && m === "PUT") return this.uploadContact(g, drawNo, req);
+      if (many && m === "GET") {
+        if (drawNo !== g.drawNo || g.state !== "done") return this.binary(new Uint8Array(0));
+        // Sorted by hash, without pids: the order reveals nothing about the uploader.
+        const all = [...g.contacts.values()].map((k) => ({ k, h: sha256(k) })).sort((a, b) => compareBytes(a.h, b.h));
+        return this.binary(concat(...all.map((x) => x.k)));
+      }
+    }
     if ((r = /^\/api\/groups\/([^/]+)\/rounds\/(\d+)\/(roles|reveal)$/.exec(path))) {
       const g = this.group(r[1]!);
       const round = Number(r[2]);
@@ -291,7 +315,7 @@ export class MockServer {
         if (kind === "roles") {
           const R = g.rolesR.get(round);
           if (!R) throw new HttpError(409, "conflict", "incomplete");
-          return { status: 200, headers: { "content-type": "application/octet-stream", "cache-control": "no-store" }, body: R };
+          return this.binary(R);
         }
         const rel = g.releases.get(round);
         if (!rel) throw new HttpError(409, "conflict", "incomplete");
@@ -302,6 +326,10 @@ export class MockServer {
   }
 
   // ------------------------------------------------------------ helpers
+
+  private binary(body: Uint8Array): MockResponse {
+    return { status: 200, headers: { "content-type": "application/octet-stream", "cache-control": "no-store" }, body };
+  }
 
   private json<T>(req: MockRequest): T {
     if (req.body.length > 16 * 1024) throw new HttpError(413, "payload_too_large", "json too large");
@@ -391,6 +419,8 @@ export class MockServer {
     g.rolesAgg = null;
     g.sdAgg = null;
     g.revealUploads = new Map();
+    // Spec §16.2: contacts belong to one draw (a collision round never reaches done).
+    if (newDraw) g.contacts = new Map();
   }
 
   // ------------------------------------------------------------ endpoints
@@ -435,6 +465,7 @@ export class MockServer {
       revealUploads: new Map(),
       releases: new Map(),
       push: new Map(),
+      contacts: new Map(),
     });
     this.log(`[${gidB64.slice(0, 6)}] created`);
     return jsonResponse(201, { gid: gidB64 });
@@ -475,20 +506,50 @@ export class MockServer {
       encName: j.encName,
       encWish: j.encWish,
       joinedAt: this.now(),
+      lastNotify: 0,
     });
     this.changed(g);
     return jsonResponse(201, { pid: pidB64 });
   }
 
+  /** Spec §16.1/§16.3: allowed in every state; after the start the name stays byte-identical. */
   private updateParticipant(g: Group, p: Participant, req: MockRequest): MockResponse {
     this.requireParticipant(p, req);
     const j = this.parseJoin(g, req);
-    if (g.state !== "open") throw new HttpError(409, "conflict", "not open");
+    const notify = this.json<UpdateParticipantRequest>(req).notify_endpoint;
     if (!bytesEqual(j.ipk, p.ipk) || !bytesEqual(j.idh, p.idh) || !bytesEqual(j.ah, p.authHash))
       throw new HttpError(400, "bad_request", "keys differ");
+    if (notify !== undefined && notify !== null) {
+      if (typeof notify !== "string" || !/^https:\/\//.test(notify) || utf8(notify).length > 700)
+        throw new HttpError(400, "bad_request", "notify_endpoint must be https");
+      if (g.state !== "done") throw new HttpError(409, "conflict", "notify_endpoint only in done");
+    }
+    if (g.state !== "open" && j.encName !== p.encName) throw new HttpError(409, "conflict", "name is fixed after the start");
     p.encName = j.encName;
     p.encWish = j.encWish;
-    this.changed(g);
+    if (notify) {
+      // At most one hint per participant every 10 minutes; above that it is dropped silently.
+      const now = this.now();
+      if (now - p.lastNotify >= 600) {
+        p.lastNotify = now;
+        try {
+          this.onNotify(notify);
+        } catch {
+          /* ignore (404/410 of the push service etc.) */
+        }
+      }
+    }
+    this.changed(g, g.state === "open");
+    return empty();
+  }
+
+  /** Spec §16.2: one contact per participant and draw (replaces the previous one). */
+  private uploadContact(g: Group, drawNo: number, req: MockRequest): MockResponse {
+    const p = this.participantByToken(g, req);
+    if (g.state !== "done" || drawNo !== g.drawNo) throw new HttpError(409, "conflict", "not done / old draw");
+    if (req.body.length !== 816) throw new HttpError(400, "bad_request", "wrong length");
+    this.checkSig(g, p, 3, g.round, req);
+    g.contacts.set(b64uEncode(p.pid), req.body.slice());
     return empty();
   }
 
@@ -501,6 +562,7 @@ export class MockServer {
       if (g.participants.size < N_MIN) {
         g.state = "open";
         g.submitted = new Set();
+        g.contacts = new Map();
       } else {
         this.newRound(g, true);
       }
@@ -577,7 +639,7 @@ export class MockServer {
     return empty();
   }
 
-  private checkSig(g: Group, p: Participant, kind: 1 | 2, round: number, req: MockRequest): void {
+  private checkSig(g: Group, p: Participant, kind: 1 | 2 | 3, round: number, req: MockRequest): void {
     const sig = b64uDecodeLen(req.headers["x-wichtel-signature"], 64);
     if (!sig) throw new HttpError(400, "bad_request", "missing signature");
     if (!bytesEqual(sig, mockSign(p.ipk, uploadMessage(kind, g.gid, round, p.pid, req.body))))

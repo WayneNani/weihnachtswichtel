@@ -1,12 +1,13 @@
 /**
  * Web-Push opt-in (Konzept §7.4). Off by default; only after an explicit click.
  * The server stores endpoint + keys and sends payload-less pushes to everybody in the group.
- * Every group has its own service-worker registration and PushSubscription (lib/pushscope.ts).
+ * Every group has its own service-worker registration and PushSubscription (lib/pushscope.ts);
+ * once the own result is known, a second, anonymous one for wish-change hints (Spec §16.4).
  */
 import type { Api } from "./api/client";
 import { b64uDecode, b64uEncode, bytesEqual } from "./lib/bytes";
 import { idbKv, PUSH_LINKS_KEY, type PushLink } from "./lib/idb";
-import { pushScope } from "./lib/pushscope";
+import { pushScope, wishScope } from "./lib/pushscope";
 import { saveGroup } from "./lib/storage";
 
 export type PushSupport = "supported" | "unsupported" | "ios_homescreen" | "denied" | "insecure";
@@ -117,15 +118,7 @@ export async function enablePush(ctx: PushContext): Promise<void> {
   const perm = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
   if (perm !== "granted") throw new Error("Benachrichtigungen wurden im Browser nicht erlaubt.");
   const reg = await activated(await navigator.serviceWorker.register("/sw.js", { scope: pushScope(ctx.gidB64) }));
-  const { public_key } = await ctx.api.vapidKey();
-  const key = b64uDecode(public_key);
-  let sub = await reg.pushManager.getSubscription();
-  const current = sub?.options.applicationServerKey;
-  if (sub && current && !bytesEqual(new Uint8Array(current), key)) {
-    await sub.unsubscribe();
-    sub = null;
-  }
-  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key as BufferSource });
+  const sub = await subscribe(reg, ctx.api);
   const p256dh = sub.getKey("p256dh");
   const auth = sub.getKey("auth");
   if (!p256dh || !auth) throw new Error("Der Browser liefert keine Push-Schlüssel.");
@@ -151,7 +144,41 @@ async function forgetPushLocally(gidB64: string): Promise<void> {
   const remaining = await setLink(null, gidB64);
   if (!hasServiceWorker()) return;
   await dropRegistration(pushScope(gidB64));
+  await dropRegistration(wishScope(gidB64));
   await dropLegacyIfUnused(remaining);
+}
+
+/** Subscribes `reg` with the server's VAPID key (re-subscribes if the key changed). */
+async function subscribe(reg: ServiceWorkerRegistration, api: Api): Promise<PushSubscription> {
+  const { public_key } = await api.vapidKey();
+  const key = b64uDecode(public_key);
+  let sub = await reg.pushManager.getSubscription();
+  const current = sub?.options.applicationServerKey;
+  if (sub && current && !bytesEqual(new Uint8Array(current), key)) {
+    await sub.unsubscribe();
+    sub = null;
+  }
+  return sub ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key as BufferSource }));
+}
+
+/**
+ * Spec §16.4: endpoint of the anonymous wish-hint subscription (own registration with scope
+ * `/g/<gid>/wish/`), created if missing. The endpoint is only ever put into the encrypted contact
+ * (Spec §16.2), never sent to the server directly. Never asks for permission: without granted
+ * notifications, without service worker or on any error the result is "" (no hint).
+ */
+export async function ensureWishEndpoint(api: Api, gidB64: string): Promise<string> {
+  try {
+    if (!hasServiceWorker() || typeof Notification === "undefined" || Notification.permission !== "granted") return "";
+    const existing = await findRegistration(wishScope(gidB64));
+    // Fast path (asked on every live update): an existing subscription is used as it is.
+    const sub = await existing?.pushManager.getSubscription();
+    if (sub) return sub.endpoint;
+    const reg = await activated(existing ?? (await navigator.serviceWorker.register("/sw.js", { scope: wishScope(gidB64) })));
+    return (await subscribe(reg, api)).endpoint;
+  } catch {
+    return "";
+  }
 }
 
 /** Credentials to also unsubscribe on the server (the participant's own token). */
@@ -164,7 +191,8 @@ export interface PushServerCtx {
 /**
  * Forget push state for a group (after "vergessen", leaving or deletion): with `server`, the
  * subscription is first removed on the server (errors ignored – e.g. group already gone); then
- * the group's push link and its service-worker registration are removed on this device.
+ * the group's push link and its service-worker registrations (round and wish hint) are removed on
+ * this device.
  */
 export async function forgetPush(gidB64: string, server?: PushServerCtx): Promise<void> {
   if (server) {

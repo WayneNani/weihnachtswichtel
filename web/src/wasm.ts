@@ -65,6 +65,25 @@ export interface WasmBindgenModule {
     tStar: number,
     reveals: { pid: Uint8Array; ciphertext: Uint8Array }[],
   ): DrawResultJs;
+  buildContact(
+    keys: ParticipantKeysHandle,
+    gid: Uint8Array,
+    round: number,
+    roster: RosterEntryInput[],
+    state: Uint8Array,
+    tStar: number,
+    recipientIdh: Uint8Array,
+    endpoint: string,
+  ): Uint8Array;
+  openContacts(
+    keys: ParticipantKeysHandle,
+    gid: Uint8Array,
+    round: number,
+    roster: RosterEntryInput[],
+    state: Uint8Array,
+    tStar: number,
+    contacts: Uint8Array,
+  ): string | null | undefined;
 }
 
 async function loadReal(): Promise<WichtelWasm> {
@@ -97,5 +116,8 @@ export function bindWasm(m: WasmBindgenModule): WichtelWasm {
     buildRevealUpload: (keys, gid, round, roster, st, note) => m.buildRevealUpload(keys, gid, round, roster, st, note),
     selectAttempt: (st, sd) => m.selectAttempt(st, sd),
     openResult: (keys, gid, round, roster, st, tStar, reveals) => m.openResult(keys, gid, round, roster, st, tStar, reveals),
+    buildContact: (keys, gid, round, roster, st, tStar, idh, endpoint) => m.buildContact(keys, gid, round, roster, st, tStar, idh, endpoint),
+    // wasm-bindgen maps Option<String>::None to undefined.
+    openContacts: (keys, gid, round, roster, st, tStar, contacts) => m.openContacts(keys, gid, round, roster, st, tStar, contacts) ?? null,
   };
 }

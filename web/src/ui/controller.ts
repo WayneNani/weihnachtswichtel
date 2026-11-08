@@ -11,6 +11,7 @@ import type { KvStore } from "../lib/idb";
 import { loadGroup, saveGroup } from "../lib/storage";
 import { decide, ProtocolDriver, type DriverStatus, type RolesJob, type RolesJobResult } from "../protocol/driver";
 import { decodeMeta, decodeRoster, type DecodedRoster } from "../protocol/roster";
+import { ensureWishEndpoint } from "../push";
 import type { ParticipantKeysHandle, WichtelWasm } from "../wasm-api";
 
 export type LiveMode = "connecting" | "sse" | "poll";
@@ -44,6 +45,11 @@ export interface ControllerDeps {
   computeRoles(job: RolesJob): Promise<RolesJobResult>;
   /** Override for tests. */
   eventSource?: ((url: string) => EventSource) | null;
+  /**
+   * Spec §16.4: endpoint of the anonymous wish-hint subscription (created if missing), asked only
+   * while push is switched on for the group. Default: push.ts `ensureWishEndpoint`.
+   */
+  wishEndpoint?: (api: Api, gidB64: string) => Promise<string>;
 }
 
 const POLL_FAST = 10_000;
@@ -149,9 +155,20 @@ export class GroupController {
         seed,
         keys,
         note: () => loadGroup(this.gidB64)?.note ?? "",
+        contactEndpoint: async () => {
+          if (loadGroup(this.gidB64)?.push !== true) return "";
+          return (this.deps.wishEndpoint ?? ensureWishEndpoint)(this.deps.api, this.gidB64);
+        },
       },
     );
     this.set({ myPid: b64uEncode(keys.pid) });
+  }
+
+  /** Spec §16.3: anonymous endpoint of the own Schenker for the current draw, or null. */
+  async notifyEndpoint(): Promise<string | null> {
+    const { view, roster } = this.snap;
+    if (!this.driver || !view || !roster?.allValid) return null;
+    return this.driver.findNotifyEndpoint(view, roster.entries);
   }
 
   start(): void {

@@ -59,6 +59,8 @@ function GroupPageInner({ route, secretsFromUrl }: { route: GroupRoute; secretsF
   const snap = useSnapshot(ctrl);
   const [saveDialog, setSaveDialog] = useState<"forced" | "info" | null>(null);
   const [editing, setEditing] = useState(false);
+  /** Last save of the own entry after the start (feedback below the button). */
+  const [savedInfo, setSavedInfo] = useState<{ notified: boolean } | null>(null);
   const [leaveError, setLeaveError] = useState<string | null>(null);
   /** Left the group on this page (so the page does not ask for a personal link afterwards). */
   const [left, setLeft] = useState(false);
@@ -296,6 +298,7 @@ function GroupPageInner({ route, secretsFromUrl }: { route: GroupRoute; secretsF
 
       {view.state === "done" && snap.isMember && driver?.kind === "result" && (
         <ResultCard
+          gidB64={route.gidB64}
           recipient={roster.members.find((m) => m.pidB64 === driver.recipientPid) ?? null}
           note={driver.note}
           meta={meta}
@@ -317,9 +320,44 @@ function GroupPageInner({ route, secretsFromUrl }: { route: GroupRoute; secretsF
         </section>
       )}
 
-      {snap.isMember && view.state === "drawing" && (
-        <section class="card subtle">
-          <NoteField gidB64={route.gidB64} locked={revealLocked} />
+      {view.state !== "open" && snap.isMember && me && (
+        <section class="card subtle" aria-labelledby="entry-title">
+          <h2 id="entry-title">Dein Eintrag</h2>
+          {editing ? (
+            <EditEntry
+              ctrl={ctrl}
+              name={me.name ?? ""}
+              wish={me.wish ?? ""}
+              onDone={(saved) => {
+                setEditing(false);
+                setSavedInfo(saved);
+              }}
+            />
+          ) : (
+            <>
+              <p>
+                Eingetragen als <strong>{me.name}</strong>. Deinen Wunschzettel kannst du jederzeit ändern.
+              </p>
+              {savedInfo && (
+                <Notice kind="ok">
+                  ✓ Gespeichert.{savedInfo.notified && " Die Person, die dich beschenkt, bekommt einen anonymen Hinweis."}
+                </Notice>
+              )}
+              <div class="button-row">
+                <button
+                  type="button"
+                  class="btn"
+                  onClick={() => {
+                    setSavedInfo(null);
+                    setEditing(true);
+                  }}
+                >
+                  Name / Wunschzettel ändern
+                </button>
+              </div>
+            </>
+          )}
+          {view.state === "drawing" && <NoteField gidB64={route.gidB64} locked={revealLocked} />}
         </section>
       )}
 
