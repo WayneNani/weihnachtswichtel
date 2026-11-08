@@ -422,7 +422,9 @@ Damit niemand ständig nachsehen muss, ob er wieder dran ist, kann jeder Teilneh
 - Beitreten, Liste sehen, Spielleiter entfernt Teilnehmer
 - Verlosung (Live + Asynchron), automatische Neustarts bei Kollision/Störung
 - Ergebnisanzeige, private Notiz an den Schenker
-- Wunschzettel (für die Gruppe sichtbar, mit `GK` verschlüsselt)
+- Wunschzettel (für die Gruppe sichtbar, mit `GK` verschlüsselt), **auch nach der Verlosung änderbar**;
+  der eigene Schenker bekommt dann einen Hinweis – in der App und, falls eingeschaltet, per Push
+  über eine anonyme Push-Adresse, die nur das Wichtelkind kennt (Protokoll-Spec §16)
 - Automatisches Löschen, Sofort-Löschen
 
 **v2 (später)**

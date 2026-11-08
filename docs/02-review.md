@@ -245,3 +245,27 @@ Restrisiken:
 - Der Server braucht ausgehende HTTPS-Verbindungen. In Tests wird der Push-Dienst durch einen
   lokalen Mock ersetzt.
 
+### G6 Wunschzettel nach der Verlosung, Hinweis nur an den Schenker
+Gewünscht: Wunschzettel jederzeit änderbar, und **nur** der Schenker wird benachrichtigt. Der Server
+kennt die Zuordnung nicht und kann deshalb nicht gezielt pushen.
+
+**Lösung (Spec §16):** Nach dem Ergebnis lädt **jeder** einen versiegelten „Kontakt“ für sein
+Wichtelkind hoch: HPKE von der eigenen Schenker-Rolle an den Identitätsschlüssel des Wichtelkinds,
+Inhalt = Endpoint eines **eigenen, anonymen** Push-Abos (oder leer). Der Server liefert alle
+Kontakte ohne Zuordnung aus; nur das Wichtelkind kann seinen öffnen und prüft dabei, dass er von
+seinem Schenker stammt. Beim Ändern des Wunschzettels gibt der Client diesen Endpoint mit, der
+Server pusht inhaltslos dorthin und speichert ihn nicht.
+
+Verworfen:
+- **Push an alle**, Service Worker zeigt nur beim Schenker etwas an: Browser verlangen bei jedem
+  Push eine sichtbare Benachrichtigung (Safari kündigt sonst das Abo), also bekämen alle eine.
+- **Schenker meldet ein Abo unter seiner Rolle direkt beim Server an:** Der Server könnte das über
+  Endpoint, IP und Zeitpunkt mit der Identität verknüpfen.
+
+Restrisiken:
+- **Timing:** Öffnet der Schenker sofort nach dem Hinweis die App, könnte ein neugieriger Betreiber
+  den Abruf zeitlich mit dem Push verbinden. Der Service Worker lädt beim Empfang bewusst nichts.
+- **Wichtelkind kennt die anonyme Push-Adresse des Schenkers.** Daraus allein ist er nicht
+  identifizierbar; ein Wichtelkind kann seinem Schenker höchstens Hinweise schicken, begrenzt auf
+  einen pro 10 Minuten.
+
