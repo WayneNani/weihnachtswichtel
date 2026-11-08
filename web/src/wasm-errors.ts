@@ -18,6 +18,7 @@ export type WichtelErrorCode =
   | "NO_VALID_ATTEMPT"
   | "ATTEMPT_MISMATCH"
   | "REVEAL_COUNT"
+  | "CONTACT_COUNT"
   | "RNG_UNAVAILABLE"
   | "INVALID_ARGUMENT"
   | "INVALID_STATE"
@@ -26,7 +27,7 @@ export type WichtelErrorCode =
 const CODES: ReadonlySet<string> = new Set<WichtelErrorCode>([
   "INVALID_LENGTH", "INVALID_KEY", "BAD_SIGNATURE", "DECRYPTION_FAILED", "INVALID_ENCODING",
   "INVALID_PARTICIPANT_COUNT", "NOT_IN_ROSTER", "OWN_ROLE_MISSING", "COLLISION", "NO_VALID_ATTEMPT",
-  "ATTEMPT_MISMATCH", "REVEAL_COUNT", "RNG_UNAVAILABLE", "INVALID_ARGUMENT", "INVALID_STATE", "STATE_MISMATCH",
+  "ATTEMPT_MISMATCH", "REVEAL_COUNT", "CONTACT_COUNT", "RNG_UNAVAILABLE", "INVALID_ARGUMENT", "INVALID_STATE", "STATE_MISMATCH",
 ]);
 
 /** The `code` of a `WichtelError` thrown by the WASM module (also after a worker round trip), else null. */
@@ -68,6 +69,9 @@ export function classifyWasmError(e: unknown): WasmFailure {
     case "NO_VALID_ATTEMPT":
     case "ATTEMPT_MISMATCH":
     case "REVEAL_COUNT":
+    // openContacts (Spec §16.2): more than one valid contact. Not a disturbance of the draw –
+    // the caller (ProtocolDriver.findNotifyEndpoint) simply sends no notify_endpoint.
+    case "CONTACT_COUNT":
     case "INVALID_ARGUMENT":
       return "data";
     case "INVALID_STATE":

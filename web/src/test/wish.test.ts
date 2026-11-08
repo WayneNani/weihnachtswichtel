@@ -15,6 +15,7 @@ import { computeRolesInline, contactUploadNeeded, endpointHash, ProtocolDriver, 
 import { buildJoinRequest, nameLocked, submitEntryUpdate } from "../protocol/entry";
 import { decodeRoster, sealMeta } from "../protocol/roster";
 import type { ParticipantKeysHandle } from "../wasm-api";
+import { classifyWasmError, wichtelError } from "../wasm-errors";
 
 interface Player {
   name: string;
@@ -264,6 +265,28 @@ test("notify_endpoint only for a real wish change in done; lookup errors never b
   const res = await submitEntryUpdate({ ...base, view: v, current: me(s, v, kid), next: { name: "P0", wish: "Ohne Push" }, findNotifyEndpoint: find });
   assert.deepEqual(res, { sent: true, notified: false });
   assert.equal(s.notified.length, 1);
+});
+
+test("CONTACT_COUNT from openContacts ⇒ no endpoint, the wish list is saved without a hint", async () => {
+  const s = await setup(4);
+  await s.api.start(s.gidB64, s.a);
+  await s.runAll();
+  const kid = s.players[1]!;
+  s.schenkerOf(kid).endpoint = "https://push.example/anon-3";
+  await s.stepAll();
+  const wasm = { ...s.wasm, openContacts: () => { throw wichtelError("CONTACT_COUNT", "CONTACT_COUNT: 2 valid contacts"); } };
+  assert.equal(classifyWasmError(wichtelError("CONTACT_COUNT", "x")), "data");
+  const d = new ProtocolDriver({ wasm, api: s.api, kv: s.kv, computeRoles: computeRolesInline(wasm) }, { gidB64: s.gidB64, gid: s.gid, seed: kid.seed, keys: kid.keys, note: () => "" });
+  const { v, r } = await s.roster();
+  assert.equal(await d.findNotifyEndpoint(v, r.entries), null);
+  const res = await submitEntryUpdate({
+    api: s.api, wasm: s.wasm, gk: s.k, gid: s.gid, gidB64: s.gidB64, keys: kid.keys, view: v,
+    current: me(s, v, kid), next: { name: "P1", wish: "Geändert" },
+    findNotifyEndpoint: () => d.findNotifyEndpoint(v, r.entries),
+  });
+  assert.deepEqual(res, { sent: true, notified: false });
+  assert.equal(s.updates.at(-1)!.notify_endpoint, undefined);
+  assert.deepEqual(s.notified, []);
 });
 
 test("forgetting the group with push on replaces the own contact by one without endpoint", async () => {
