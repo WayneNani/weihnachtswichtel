@@ -116,7 +116,7 @@ pub struct ScheduleRequest {
 
 // ---------------------------------------------------------------- participants
 
-/// `POST /api/groups/{gid}/participants` and `PUT /api/groups/{gid}/participants/{pid}`.
+/// `POST /api/groups/{gid}/participants`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JoinRequest {
     pub ipk: Key32,
@@ -126,6 +126,39 @@ pub struct JoinRequest {
     pub enc_wish: Bin,
     /// Spec §5.
     pub join_sig: Sig64,
+}
+
+/// `PUT /api/groups/{gid}/participants/{pid}` (Spec §16.1): same keys as the join, new
+/// `enc_wish`/`join_sig`. `enc_name` may only change while the group is `open`; in `drawing`
+/// and `done` it must be byte-identical to the stored one (else `409`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateParticipantRequest {
+    pub ipk: Key32,
+    pub idh: Key32,
+    pub auth_hash: Key32,
+    pub enc_name: Bin,
+    pub enc_wish: Bin,
+    /// Spec §5.
+    pub join_sig: Sig64,
+    /// Spec §16.3: push endpoint of the own giver, taken from the decrypted contact. Only used
+    /// in `done`: the server sends one empty push there and neither stores nor logs it.
+    /// Ignored (without error) in other states, when invalid or when rate-limited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_endpoint: Option<String>,
+}
+
+impl UpdateParticipantRequest {
+    /// The fields shared with [`JoinRequest`] (for the signature check).
+    pub fn join_fields(&self) -> JoinRequest {
+        JoinRequest {
+            ipk: self.ipk,
+            idh: self.idh,
+            auth_hash: self.auth_hash,
+            enc_name: self.enc_name.clone(),
+            enc_wish: self.enc_wish.clone(),
+            join_sig: self.join_sig,
+        }
+    }
 }
 
 /// Response to a join.
@@ -224,6 +257,24 @@ mod tests {
         let j = serde_json::to_string(&s).unwrap();
         assert_eq!(j, r#"{"state":"drawing","round":3,"phase":"roles"}"#);
         assert_eq!(serde_json::from_str::<GroupState>(&j).unwrap(), s);
+    }
+
+    #[test]
+    fn update_request_notify_endpoint_is_optional() {
+        let j = serde_json::json!({
+            "ipk": Fixed([1u8; 32]), "idh": Fixed([2u8; 32]), "auth_hash": Fixed([3u8; 32]),
+            "enc_name": Bin(vec![4]), "enc_wish": Bin(vec![]), "join_sig": Fixed([5u8; 64]),
+        });
+        let r: UpdateParticipantRequest = serde_json::from_value(j.clone()).unwrap();
+        assert_eq!(r.notify_endpoint, None);
+        assert_eq!(serde_json::to_value(&r).unwrap(), j);
+        let mut j2 = j;
+        j2["notify_endpoint"] = "https://push.example.org/x".into();
+        let r: UpdateParticipantRequest = serde_json::from_value(j2).unwrap();
+        assert_eq!(
+            r.notify_endpoint.as_deref(),
+            Some("https://push.example.org/x")
+        );
     }
 
     #[test]
