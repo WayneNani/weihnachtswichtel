@@ -10,7 +10,6 @@ publish.workspace = true
 wichtel-core.workspace = true
 wichtel-api.workspace = true
 # Already used by wichtel-core (same version/features): kind-3 upload signatures (Spec §16).
-ed25519-dalek.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tower.workspace = true

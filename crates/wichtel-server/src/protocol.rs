@@ -3,8 +3,6 @@
 //! Production uses [`CoreOps`] (thin wrappers around `wichtel-core`). Tests can substitute a
 //! fake to exercise HTTP, state machine, store, push and jobs independently of the crypto.
 
-use ed25519_dalek::{Signature, VerifyingKey};
-use sha2::{Digest, Sha256};
 use wichtel_core::dcnet::RolesOutcome;
 use wichtel_core::keys::UploadKind;
 use wichtel_core::roster::{Roster, RosterEntry};
@@ -132,7 +130,16 @@ impl ProtocolOps for CoreOps {
         body: &[u8],
         sig: &[u8; 64],
     ) -> bool {
-        verify_upload_kind(UPLOAD_KIND_CONTACT, gid, pid, ipk, round, body, sig)
+        wichtel_core::keys::verify_upload(
+            &GroupId(*gid),
+            &Pid(*pid),
+            ipk,
+            UploadKind::Contact,
+            round,
+            body,
+            sig,
+        )
+        .is_ok()
     }
 
     fn xor_into(&self, acc: &mut [u8], src: &[u8]) -> bool {
@@ -166,81 +173,24 @@ impl ProtocolOps for CoreOps {
     }
 }
 
-/// Upload kind byte of a contact (Spec §12, §16.2).
-pub const UPLOAD_KIND_CONTACT: u8 = 3;
-
-/// `upload_sig` check of Spec §12 for an arbitrary kind byte. Same message and checks as
-/// `wichtel_core::keys::verify_upload` (strict verification, weak keys rejected); needed for
-/// kind 3 as long as `wichtel_core::keys::UploadKind` has no contact variant. The test below
-/// pins it to the core implementation for kinds 1 and 2.
-// TODO(merge): use `wichtel_core::keys::verify_upload(…, UploadKind::Contact, …)` once
-// wichtel-core provides it.
-fn verify_upload_kind(
-    kind: u8,
-    gid: &[u8; 16],
-    pid: &[u8; 16],
-    ipk: &[u8; 32],
-    round: u32,
-    body: &[u8],
-    sig: &[u8; 64],
-) -> bool {
-    let Ok(vk) = VerifyingKey::from_bytes(ipk) else {
-        return false;
-    };
-    if vk.is_weak() {
-        return false;
-    }
-    let msg: [u8; 32] = Sha256::new()
-        .chain_update(b"wichtel/v1/upload")
-        .chain_update([kind])
-        .chain_update(gid)
-        .chain_update(round.to_be_bytes())
-        .chain_update(pid)
-        .chain_update(Sha256::digest(body))
-        .finalize()
-        .into();
-    vk.verify_strict(&msg, &Signature::from_bytes(sig)).is_ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use wichtel_core::keys::ParticipantKeys;
 
-    /// The local kind-3 verification uses exactly the message of wichtel-core (checked with
-    /// kinds 1 and 2, which wichtel-core can sign).
+    /// Kind 3 (contact) is verified by wichtel-core and is not interchangeable with kinds 1/2.
     #[test]
-    fn local_upload_verification_matches_core() {
+    fn contact_upload_verification_uses_core() {
         let gid = GroupId([3u8; 16]);
         let keys = ParticipantKeys::derive(&[8u8; 32], &gid).unwrap();
         let p = keys.public();
-        let body = [0x5au8; 100];
-        for (kind, byte) in [(UploadKind::Roles, 1u8), (UploadKind::Reveal, 2u8)] {
-            let sig = keys.sign_upload(kind, 7, &body);
-            assert!(verify_upload_kind(
-                byte, &gid.0, &p.pid.0, &p.ipk, 7, &body, &sig
-            ));
-            assert!(!verify_upload_kind(
-                UPLOAD_KIND_CONTACT,
-                &gid.0,
-                &p.pid.0,
-                &p.ipk,
-                7,
-                &body,
-                &sig
-            ));
-            assert!(!verify_upload_kind(
-                byte, &gid.0, &p.pid.0, &p.ipk, 8, &body, &sig
-            ));
-            assert!(!verify_upload_kind(
-                byte,
-                &gid.0,
-                &p.pid.0,
-                &p.ipk,
-                7,
-                &body[1..],
-                &sig
-            ));
-        }
+        let body = [0x5au8; 816];
+        let ops = CoreOps;
+        let sig = keys.sign_upload(UploadKind::Contact, 7, &body);
+        assert!(ops.verify_contact_upload(&gid.0, &p.pid.0, &p.ipk, 7, &body, &sig));
+        assert!(!ops.verify_contact_upload(&gid.0, &p.pid.0, &p.ipk, 8, &body, &sig));
+        assert!(!ops.verify_contact_upload(&gid.0, &p.pid.0, &p.ipk, 7, &body[1..], &sig));
+        let reveal_sig = keys.sign_upload(UploadKind::Reveal, 7, &body);
+        assert!(!ops.verify_contact_upload(&gid.0, &p.pid.0, &p.ipk, 7, &body, &reveal_sig));
     }
 }
