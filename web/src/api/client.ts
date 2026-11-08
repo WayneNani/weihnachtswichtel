@@ -11,6 +11,7 @@ import type {
   JoinResponse,
   PushSubscriptionRequest,
   RevealRelease,
+  UpdateParticipantRequest,
   VapidKeyResponse,
 } from "./types";
 
@@ -37,7 +38,8 @@ export interface Api {
   start(gid: string, adminSecret: Uint8Array): Promise<void>;
   restart(gid: string, adminSecret: Uint8Array): Promise<void>;
   join(gid: string, req: JoinRequest): Promise<JoinResponse>;
-  updateParticipant(gid: string, pid: string, token: Uint8Array, req: JoinRequest): Promise<void>;
+  /** Spec §16.1/§16.3: allowed in every state; after the start only `enc_wish` may change. */
+  updateParticipant(gid: string, pid: string, token: Uint8Array, req: UpdateParticipantRequest): Promise<void>;
   /** `bearer` is AS (admin) or tok (self). */
   removeParticipant(gid: string, pid: string, bearer: Uint8Array): Promise<void>;
   uploadRoles(gid: string, round: number, token: Uint8Array, body: Uint8Array, sig: Uint8Array): Promise<void>;
@@ -46,6 +48,10 @@ export interface Api {
   uploadReveal(gid: string, round: number, token: Uint8Array, body: Uint8Array, sig: Uint8Array): Promise<void>;
   /** `null` while incomplete (409). */
   getReveal(gid: string, round: number): Promise<RevealRelease | null>;
+  /** Spec §16.2: own contact `K_i` for draw `drawNo` (signature kind 3, r = round of done). */
+  uploadContact(gid: string, drawNo: number, token: Uint8Array, body: Uint8Array, sig: Uint8Array): Promise<void>;
+  /** Spec §16.2: all contacts of draw `drawNo` (concatenated 816-B blocks, no pids). */
+  getContacts(gid: string, drawNo: number): Promise<Uint8Array>;
   vapidKey(): Promise<VapidKeyResponse>;
   putPush(gid: string, pid: string, token: Uint8Array, sub: PushSubscriptionRequest): Promise<void>;
   deletePush(gid: string, pid: string, token: Uint8Array): Promise<void>;
@@ -166,6 +172,13 @@ export function createApi(fetchImpl: FetchLike = (i, init) => fetch(i, init), ba
         const res = await call(`/groups/${enc(gid)}/rounds/${round}/reveal`);
         return (await res.json()) as RevealRelease;
       });
+    },
+    async uploadContact(gid, drawNo, tok, body, sig) {
+      await call(`/groups/${enc(gid)}/draws/${drawNo}/contact`, binary(tok, body, sig));
+    },
+    async getContacts(gid, drawNo) {
+      const res = await call(`/groups/${enc(gid)}/draws/${drawNo}/contacts`);
+      return new Uint8Array(await res.arrayBuffer());
     },
     async vapidKey() {
       const res = await call("/push/vapid-key");

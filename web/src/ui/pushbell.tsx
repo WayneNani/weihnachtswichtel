@@ -138,6 +138,9 @@ export function PushBell({ ctrl, personalLink, title }: { ctrl: GroupController;
       await enablePush({ api: ctrl.api, gidB64: gid, pidB64: pid, token: keys.authToken, personalLink, title });
       setEnabled(true);
       setAsking(false);
+      // Result already there ⇒ the driver creates the anonymous wish-hint subscription and
+      // re-uploads the own contact with its endpoint (Spec §16.4).
+      void ctrl.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Einschalten hat nicht geklappt.");
     } finally {
@@ -156,6 +159,8 @@ export function PushBell({ ctrl, personalLink, title }: { ctrl: GroupController;
       setEnabled(false);
     } finally {
       setBusy(false);
+      // The wish-hint registration is gone: the driver re-uploads the contact without endpoint.
+      void ctrl.refresh();
     }
   };
 
@@ -187,7 +192,10 @@ export function PushBell({ ctrl, personalLink, title }: { ctrl: GroupController;
           </div>
           {enabled ? (
             <>
-              <p>Eingeschaltet: Du bekommst einen Hinweis, wenn es in dieser Runde etwas Neues gibt.</p>
+              <p>
+                Eingeschaltet: Du bekommst einen Hinweis, wenn es in dieser Runde etwas Neues gibt – und nach der
+                Verlosung, wenn dein Wichtelkind seinen Wunschzettel ändert.
+              </p>
               {isIos() && <p class="hint">Tipp: Lass die Web-App auf dem Home-Bildschirm, sonst kommen keine Hinweise an.</p>}
               <button type="button" class="btn" disabled={busy} onClick={turnOff}>
                 Ausschalten
@@ -229,6 +237,11 @@ export function PushBell({ ctrl, personalLink, title }: { ctrl: GroupController;
                   Der sieht nur, dass unser Server deinen Browser weckt – keinen Namen, keinen Text.
                 </li>
                 <li>Die Nachricht lautet immer gleich: „🎁 Wichteln: Es gibt Neuigkeiten in deiner Runde“.</li>
+                <li>
+                  Nach der Verlosung zusätzlich: „🎁 Wichteln: Dein Wichtelkind hat seinen Wunschzettel aktualisiert“.
+                  Dafür bekommt nur dein Wichtelkind verschlüsselt eine zweite, anonyme Push-Adresse – der Server
+                  erfährt nicht, wer wen beschenkt.
+                </li>
                 <li>Du kannst es jederzeit hier oben wieder ausschalten. Mit der Runde wird auch das Abo gelöscht.</li>
               </ul>
               <div class="button-row">

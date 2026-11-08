@@ -85,6 +85,23 @@ function decodeState(b: Uint8Array): EvalState {
   return JSON.parse(fromUtf8(b)) as EvalState;
 }
 
+/** Spec §16.2 sizes: plaintext L_KP, contact L_K = 32 (enc) + 768 + 16 (tag). */
+const L_KP = 768;
+const L_K = 816;
+const ENDPOINT_MAX = 700;
+
+/**
+ * Mock contact key: bound to the recipient's IDH and the chosen attempt (stands in for HPKE to
+ * IDH_j). The tag binds the sender pid (stands in for Mode Auth with GP of the Schenker role).
+ */
+function contactKey(idh: Uint8Array, gid: Uint8Array, round: number, tStar: number): Uint8Array {
+  return sha256(l("mock/contact"), idh, gid, u32be(round), new Uint8Array([tStar]));
+}
+
+function contactTag(key: Uint8Array, enc: Uint8Array, senderPid: Uint8Array, ct: Uint8Array): Uint8Array {
+  return sha256(l("mock/contact-tag"), key, enc, senderPid, ct).slice(0, 16);
+}
+
 function selfDraws(st: EvalState, gid: Uint8Array, t: number): boolean {
   return mockSigma(gid, st.round, t, st.n)[st.index] === st.index;
 }
@@ -244,6 +261,47 @@ export function createMockWasm(opts: MockOptions = {}): WichtelWasm {
       if (expected !== b64uEncode(found[0]!.recipientPid)) throw new Error("mock permutation mismatch");
       void roster;
       return found[0]!;
+    },
+
+    buildContact(keys, gid, round, roster, evaluationState, tStar, recipientIdh, endpoint) {
+      const st = decodeState(evaluationState);
+      if (st.round !== round || st.n !== roster.length) throw new Error("state mismatch");
+      if (!roster.some((e) => bytesEqual(e.idh, recipientIdh))) throw new Error("recipient not in roster");
+      const ep = utf8(endpoint);
+      if (ep.length > ENDPOINT_MAX) throw new Error("endpoint too long");
+      if (endpoint && !endpoint.startsWith("https://")) throw new Error("endpoint must be https");
+      const pt = new Uint8Array(L_KP);
+      pt[0] = 1;
+      pt[1] = ep.length >> 8;
+      pt[2] = ep.length & 255;
+      pt.set(ep, 3);
+      const enc = randomBytes(32); // fresh on every call, like the HPKE ephemeral
+      const key = contactKey(recipientIdh, gid, round, tStar);
+      const ks = stream(key, enc, L_KP);
+      const ct = pt.map((b, i) => b ^ ks[i]!);
+      return concat(enc, ct, contactTag(key, enc, keys.pid, ct));
+    },
+
+    openContacts(keys, gid, round, roster, evaluationState, tStar, contacts) {
+      const st = decodeState(evaluationState);
+      if (st.round !== round || st.n !== roster.length) throw new Error("state mismatch");
+      if (contacts.length % L_K !== 0) throw new Error("contacts have wrong length");
+      // Only the own Schenker (giver of me in attempt t*) can have produced a valid tag.
+      const sigma = mockSigma(gid, round, tStar, st.n);
+      const giverPid = b64uDecode(st.pids[sigma.indexOf(st.index)]!);
+      const key = contactKey(keys.idh, gid, round, tStar);
+      for (let off = 0; off < contacts.length; off += L_K) {
+        const enc = contacts.subarray(off, off + 32);
+        const ct = contacts.subarray(off + 32, off + 32 + L_KP);
+        const tag = contacts.subarray(off + 32 + L_KP, off + L_K);
+        if (!bytesEqual(tag, contactTag(key, enc, giverPid, ct))) continue;
+        const ks = stream(key, enc, L_KP);
+        const pt = ct.map((b, i) => b ^ ks[i]!);
+        const len = (pt[1]! << 8) | pt[2]!;
+        if (pt[0] !== 1 || len > ENDPOINT_MAX || pt.subarray(3 + len).some((b) => b !== 0)) continue;
+        return len === 0 ? null : fromUtf8(pt.subarray(3, 3 + len));
+      }
+      return null;
     },
   };
 }

@@ -28,6 +28,8 @@ export interface LocalGroup {
   pushPrompted?: boolean;
   /** First protocol round seen for the current draw (collision hint, Spec §11). */
   drawRound?: { drawNo: number; firstRound: number };
+  /** Hash of the recipient's wish list as last seen in the result card (lib/wishseen.ts). */
+  wishSeen?: { drawNo: number; hash: string };
   updatedAt: number;
 }
 

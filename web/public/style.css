@@ -699,6 +699,11 @@ input[readonly] {
   background: var(--red-soft);
   color: var(--red);
 }
+.tag-gold {
+  background: var(--gold-soft);
+  color: var(--gold);
+  border: 1px solid var(--gold-bright);
+}
 
 /* ---------- home ---------- */
 
@@ -1102,6 +1107,24 @@ progress {
 }
 .result-block h3 {
   margin-top: 0;
+}
+/* Wish list of the recipient changed since last seen (Spec §16): gold edge + tag. */
+.result-block.wish-updated {
+  box-shadow: inset 4px 0 0 var(--gold-bright);
+}
+.result-block.wish-updated .hint {
+  margin: 0 0 6px;
+}
+.wish-update-hint {
+  display: inline-block;
+  margin: 0 0 12px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: var(--gold-soft);
+  color: var(--text);
+}
+.wish-update-hint .tag {
+  margin: 0 6px 0 0;
 }
 
 /* ---------- admin ---------- */

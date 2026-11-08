@@ -9,13 +9,16 @@
  *   drawing{r, roles}          → build role vector V_i (Web Worker) and upload       (Schritt 1)
  *   drawing{r, reveal}         → fetch R, evaluate, build SD_i ‖ C_i and upload      (Schritt 2)
  *   done{r, t*}                → fetch reveals, verify t*, open own result           (Ergebnis)
+ *   done + own result known    → upload own contact once per draw (Spec §16.2; again only if the
+ *                                endpoint inside changed). Failures never hide the result.
  *
  * Errors never cause a message to the server that would reveal own positions (Spec §11).
  */
 import { ApiError, type Api } from "../api/client";
-import { N_MAX, NOTE_MAX, type GroupView } from "../api/types";
-import { b64uDecode, b64uDecodeLen, b64uEncode, utf8Len } from "../lib/bytes";
+import { ENDPOINT_MAX, N_MAX, NOTE_MAX, type GroupView } from "../api/types";
+import { b64uDecode, b64uDecodeLen, b64uEncode, utf8, utf8Len } from "../lib/bytes";
 import type { KvStore } from "../lib/idb";
+import { sha256 } from "../lib/sha256";
 import type { ParticipantKeysHandle, RosterEntryInput, WichtelWasm } from "../wasm-api";
 import { classifyWasmError } from "../wasm-errors";
 
@@ -92,6 +95,30 @@ export interface Participation {
   keys: ParticipantKeysHandle;
   /** Private note for the Schenker (read at the moment of the step-2 upload). */
   note(): string;
+  /**
+   * Spec §16.4: anonymous endpoint of the wish-hint subscription that goes into the own contact,
+   * or "" (no push). Only asked once the own result is known. Default: always "".
+   */
+  contactEndpoint?(): Promise<string>;
+}
+
+/** What this device uploaded as contact for a draw (`contact:<gid>:<pid>:<draw_no>`). */
+export interface CachedContact {
+  drawNo: number;
+  /** Hash of the endpoint inside the uploaded contact ("" ⇒ hash of the empty string). */
+  endpointHash: string;
+}
+
+export function endpointHash(endpoint: string): string {
+  return b64uEncode(sha256(utf8("wichtel/local/contact-endpoint"), utf8(endpoint)).subarray(0, 16));
+}
+
+/**
+ * Spec §16.2: a contact is uploaded once per draw, and again only if the endpoint inside it
+ * changed (push switched on/off, browser renewed the subscription).
+ */
+export function contactUploadNeeded(rec: CachedContact | undefined, drawNo: number, endpoint: string): boolean {
+  return !rec || rec.drawNo !== drawNo || rec.endpointHash !== endpointHash(endpoint);
 }
 
 interface CachedResult {
@@ -136,6 +163,73 @@ export class ProtocolDriver {
   }
 
   private async run(view: GroupView, roster: RosterEntryInput[], rosterValid: boolean): Promise<DriverStatus> {
+    const status = await this.runStep(view, roster, rosterValid);
+    if (status.kind === "result" && view.state === "done" && view.round === status.round) {
+      await this.ensureContact(view, roster, status.recipientPid);
+    }
+    return status;
+  }
+
+  /**
+   * Re-uploads the own contact if needed (e.g. right before forgetting the group: `endpoint` = "").
+   * Only acts in `done` with a cached result of the current round. Returns true after an upload.
+   */
+  syncContact(view: GroupView, roster: RosterEntryInput[], endpoint?: string): Promise<boolean> {
+    const p = this.queue.then(async () => {
+      if (view.state !== "done" || !view.participants.some((x) => x.pid === this.pidB64)) return false;
+      const cached = await this.cachedResult(view.round);
+      if (!cached || cached.round !== view.round) return false;
+      return this.ensureContact(view, roster, cached.recipientPid, endpoint);
+    });
+    this.queue = p.catch(() => undefined);
+    return p;
+  }
+
+  /** Spec §16.2 upload; errors are swallowed (retried on the next step). */
+  private async ensureContact(
+    view: Extract<GroupView, { state: "done" }>,
+    roster: RosterEntryInput[],
+    recipientPid: string,
+    endpointOverride?: string,
+  ): Promise<boolean> {
+    try {
+      let endpoint = endpointOverride ?? (this.me.contactEndpoint ? await this.me.contactEndpoint() : "");
+      if (utf8Len(endpoint) > ENDPOINT_MAX || (endpoint !== "" && !endpoint.startsWith("https://"))) endpoint = "";
+      const k = this.key("contact", view.draw_no);
+      if (!contactUploadNeeded(await this.deps.kv.get<CachedContact>(k), view.draw_no, endpoint)) return false;
+      const recipient = roster.find((e) => b64uEncode(e.pid) === recipientPid);
+      if (!recipient) return false;
+      const st = await this.evaluation(view.round, roster);
+      if (!(st instanceof Uint8Array)) return false;
+      const body = this.deps.wasm.buildContact(this.me.keys, this.me.gid, view.round, roster, st, view.t_star, recipient.idh, endpoint);
+      const sig = this.me.keys.signUpload(3, view.round, body);
+      await this.deps.api.uploadContact(this.me.gidB64, view.draw_no, this.me.keys.authToken, body, sig);
+      await this.deps.kv.set(k, { drawNo: view.draw_no, endpointHash: endpointHash(endpoint) } satisfies CachedContact);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Spec §16.3: the anonymous endpoint of the own Schenker from the contacts of the current draw,
+   * or null (not done, nothing uploaded, Schenker without push, or any error).
+   */
+  async findNotifyEndpoint(view: GroupView, roster: RosterEntryInput[]): Promise<string | null> {
+    if (view.state !== "done") return null;
+    try {
+      const st = await this.evaluation(view.round, roster);
+      if (!(st instanceof Uint8Array)) return null;
+      const contacts = await this.deps.api.getContacts(this.me.gidB64, view.draw_no);
+      if (contacts.length === 0) return null;
+      const ep = this.deps.wasm.openContacts(this.me.keys, this.me.gid, view.round, roster, st, view.t_star, contacts);
+      return ep && ep.startsWith("https://") ? ep : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async runStep(view: GroupView, roster: RosterEntryInput[], rosterValid: boolean): Promise<DriverStatus> {
     const round = "round" in view ? view.round : 0;
     const cached = round ? await this.deps.kv.get<CachedResult>(this.key("result", round)) : undefined;
     const disturbed = round ? await this.deps.kv.get<CachedDisturbance>(this.key("disturb", round)) : undefined;
@@ -252,8 +346,8 @@ export class ProtocolDriver {
   }
 }
 
-/** IndexedDB key kinds written by the driver (`<kind>:<gid>:<pid>:<round>`). */
-const KV_KINDS = ["result", "eval", "disturb"] as const;
+/** IndexedDB key kinds written by the driver (`<kind>:<gid>:<pid>:<round>`; contact: `<draw_no>`). */
+const KV_KINDS = ["result", "eval", "disturb", "contact"] as const;
 
 /** Deletes everything the driver cached for a group on this device (all pids, all rounds). */
 export async function forgetDriverState(kv: KvStore, gidB64: string): Promise<void> {

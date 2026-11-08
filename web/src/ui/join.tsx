@@ -1,27 +1,15 @@
 /** Joining, editing one's entry, private note, leaving – and the forced "save your link" dialog. */
 import { useState } from "preact/hooks";
 import { ApiError } from "../api/client";
-import { NAME_MAX, NOTE_MAX, WISH_MAX, type JoinRequest } from "../api/types";
-import { b64uEncode, utf8, utf8Len } from "../lib/bytes";
-import { authHash } from "../lib/hashes";
+import { NAME_MAX, NOTE_MAX, WISH_MAX } from "../api/types";
+import { b64uEncode, utf8Len } from "../lib/bytes";
 import { loadGroup, saveGroup } from "../lib/storage";
+import { buildJoinRequest, NAME_LOCKED_TEXT, nameLocked, submitEntryUpdate } from "../protocol/entry";
 import { cleanName } from "../protocol/roster";
-import type { ParticipantKeysHandle, WichtelWasm } from "../wasm-api";
 import { CopyField, errorText, Modal, Notice } from "./common";
 import type { GroupController } from "./controller";
 
-export function buildJoinRequest(wasm: WichtelWasm, gk: Uint8Array, gid: Uint8Array, keys: ParticipantKeysHandle, name: string, wish: string): JoinRequest {
-  const encName = wasm.gkSeal(gk, "name", gid, utf8(name), keys.pid, keys.ipk, keys.idh);
-  const encWish = wasm.gkSeal(gk, "wish", gid, utf8(wish), keys.pid, keys.ipk, keys.idh);
-  return {
-    ipk: b64uEncode(keys.ipk),
-    idh: b64uEncode(keys.idh),
-    auth_hash: b64uEncode(authHash(keys.authToken)),
-    enc_name: b64uEncode(encName),
-    enc_wish: b64uEncode(encWish),
-    join_sig: b64uEncode(keys.signJoin(encName, encWish)),
-  };
-}
+export { buildJoinRequest };
 
 function validate(name: string, wish: string): string | null {
   if (!cleanName(name)) return "Bitte gib deinen Namen ein.";
@@ -30,13 +18,27 @@ function validate(name: string, wish: string): string | null {
   return null;
 }
 
-function NameWishFields(props: { name: string; wish: string; setName(v: string): void; setWish(v: string): void }) {
+function NameWishFields(props: { name: string; wish: string; setName(v: string): void; setWish(v: string): void; nameLocked?: boolean }) {
   const wishBytes = utf8Len(props.wish);
   return (
     <>
       <div class="field">
         <label for="jname">Dein Name *</label>
-        <input id="jname" required autoComplete="given-name" value={props.name} onInput={(e) => props.setName(e.currentTarget.value)} placeholder="So kennt dich die Gruppe" />
+        <input
+          id="jname"
+          required
+          autoComplete="given-name"
+          value={props.name}
+          readOnly={props.nameLocked}
+          aria-describedby={props.nameLocked ? "jname-locked" : undefined}
+          onInput={(e) => props.setName(e.currentTarget.value)}
+          placeholder="So kennt dich die Gruppe"
+        />
+        {props.nameLocked && (
+          <p id="jname-locked" class="hint">
+            {NAME_LOCKED_TEXT}.
+          </p>
+        )}
       </div>
       <div class="field">
         <label for="jwish">Wunschzettel (optional, für alle sichtbar)</label>
@@ -102,23 +104,52 @@ export function JoinForm({ ctrl, onJoined, existingSeed }: { ctrl: GroupControll
   );
 }
 
-export function EditEntry({ ctrl, name: initialName, wish: initialWish, onDone }: { ctrl: GroupController; name: string; wish: string; onDone(): void }) {
+/**
+ * Changing the own entry. Before the start name and wish list; afterwards only the wish list
+ * (Spec §16.1). `onDone(saved)`: `saved` is null after "Abbrechen" or without changes.
+ */
+export function EditEntry({
+  ctrl,
+  name: initialName,
+  wish: initialWish,
+  onDone,
+}: {
+  ctrl: GroupController;
+  name: string;
+  wish: string;
+  onDone(saved: { notified: boolean } | null): void;
+}) {
   const [name, setName] = useState(initialName);
   const [wish, setWish] = useState(initialWish);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const keys = ctrl.keysHandle;
-  if (!keys) return null;
+  const view = ctrl.snapshot.view;
+  if (!keys || !view) return null;
+  const locked = nameLocked(view);
   const submit = async (e: Event) => {
     e.preventDefault();
     const v = validate(name, wish);
     if (v) return setError(v);
+    setError(null);
     setBusy(true);
     try {
-      const req = buildJoinRequest(ctrl.wasm, ctrl.currentSecrets.k, ctrl.gid, keys, cleanName(name), wish);
-      await ctrl.api.updateParticipant(ctrl.gidB64, b64uEncode(keys.pid), keys.authToken, req);
-      await ctrl.refresh();
-      onDone();
+      // The latest view decides (the draw may have started while the form was open).
+      const latest = ctrl.snapshot.view ?? view;
+      const res = await submitEntryUpdate({
+        api: ctrl.api,
+        wasm: ctrl.wasm,
+        gk: ctrl.currentSecrets.k,
+        gid: ctrl.gid,
+        gidB64: ctrl.gidB64,
+        keys,
+        view: latest,
+        current: { name: initialName, wish: initialWish },
+        next: { name: nameLocked(latest) ? initialName : cleanName(name), wish },
+        findNotifyEndpoint: () => ctrl.notifyEndpoint(),
+      });
+      if (res.sent) await ctrl.refresh();
+      onDone(res.sent ? { notified: res.notified } : null);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -127,13 +158,19 @@ export function EditEntry({ ctrl, name: initialName, wish: initialWish, onDone }
   };
   return (
     <form class="form" onSubmit={submit} noValidate>
-      <NameWishFields name={name} wish={wish} setName={setName} setWish={setWish} />
+      <NameWishFields name={locked ? initialName : name} wish={wish} setName={setName} setWish={setWish} nameLocked={locked} />
+      {view.state === "done" && (
+        <p class="hint">
+          Änderst du deinen Wunschzettel, bekommt die Person, die dich beschenkt, einen anonymen Hinweis – falls sie
+          Benachrichtigungen eingeschaltet hat. Niemand erfährt dabei, wer wen beschenkt.
+        </p>
+      )}
       {error && <Notice kind="error">{error}</Notice>}
       <div class="button-row">
         <button type="submit" class="btn btn-primary" disabled={busy}>
           Speichern
         </button>
-        <button type="button" class="btn" onClick={onDone}>
+        <button type="button" class="btn" onClick={() => onDone(null)}>
           Abbrechen
         </button>
       </div>

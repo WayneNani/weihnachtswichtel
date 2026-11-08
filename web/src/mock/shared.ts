@@ -76,7 +76,7 @@ export function joinMessage(gid: Uint8Array, ipk: Uint8Array, idh: Uint8Array, a
 }
 
 /** Spec §12 upload message hash. */
-export function uploadMessage(kind: 1 | 2, gid: Uint8Array, round: number, pid: Uint8Array, body: Uint8Array): Uint8Array {
+export function uploadMessage(kind: 1 | 2 | 3, gid: Uint8Array, round: number, pid: Uint8Array, body: Uint8Array): Uint8Array {
   return sha256(l("wichtel/v1/upload"), new Uint8Array([kind]), gid, u32be(round), pid, sha256(body));
 }
 

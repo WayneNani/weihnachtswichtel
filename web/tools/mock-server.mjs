@@ -5,7 +5,8 @@
 //   PORT=9000 MOCK_COLLISION=0.3 npm run dev:mock
 //
 // MOCK_COLLISION: probability (0…1) that a finished step 1 counts as a collision (new round).
-// MOCK_PUSH=0: never contact push services (default: send payload-less VAPID pushes after opt-in).
+// MOCK_PUSH=0: never contact push services (default: send payload-less VAPID pushes after opt-in,
+// incl. the anonymous wish-change hints of Spec §16.3).
 import { createServer } from "node:http";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
@@ -55,22 +56,26 @@ export async function startMockServer({ root = "dist-mock", port = 8080, host = 
   const rootDir = resolve(root);
   const vapid = vapidKeys();
   const pushEnabled = process.env.MOCK_PUSH !== "0";
+  // Payload-less VAPID push. Only the host is logged, never the endpoint (Spec §16.3: a hint
+  // endpoint is not stored, not even in the log).
+  const sendPush = (endpoint, what) => {
+    if (!pushEnabled) return;
+    const url = new URL(endpoint);
+    const jwt = vapidJwt(vapid.privateKey, url.origin);
+    fetch(endpoint, {
+      method: "POST",
+      headers: { TTL: "3600", Authorization: `vapid t=${jwt}, k=${b64u(vapid.raw)}`, "Content-Length": "0" },
+      signal: AbortSignal.timeout(10_000),
+    })
+      .then((r) => console.log(`[mock] ${what} → ${url.host}: ${r.status}`))
+      .catch((e) => console.log(`[mock] ${what} failed: ${e.message}`));
+  };
   const server = new MockServer({
     collisionRate: Number(process.env.MOCK_COLLISION ?? 0.1),
     vapidPublicKey: vapid.raw,
     log: (m) => console.log(`[mock] ${m}`),
-    onPush: (sub) => {
-      if (!pushEnabled) return;
-      const url = new URL(sub.endpoint);
-      const jwt = vapidJwt(vapid.privateKey, url.origin);
-      fetch(sub.endpoint, {
-        method: "POST",
-        headers: { TTL: "3600", Authorization: `vapid t=${jwt}, k=${b64u(vapid.raw)}`, "Content-Length": "0" },
-        signal: AbortSignal.timeout(10_000),
-      })
-        .then((r) => console.log(`[mock] push → ${url.host}: ${r.status}`))
-        .catch((e) => console.log(`[mock] push failed: ${e.message}`));
-    },
+    onPush: (sub) => sendPush(sub.endpoint, "push"),
+    onNotify: (endpoint) => sendPush(endpoint, "wish hint"),
   });
   setInterval(() => server.tick(), 2000).unref();
 

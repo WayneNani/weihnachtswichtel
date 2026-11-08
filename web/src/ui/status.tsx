@@ -1,6 +1,7 @@
 /** Read-only views: fingerprint, participant list, draw progress, result, disturbances. */
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { N_MAX, N_MIN, type GroupMeta, type GroupView } from "../api/types";
+import { loadWishSeen, markWishSeen, wishUpdated } from "../lib/wishseen";
 import type { DisturbanceReason, DriverStatus } from "../protocol/driver";
 import type { Member } from "../protocol/roster";
 import { copyText, formatDate, Notice, plural } from "./common";
@@ -206,13 +207,32 @@ export function DisturbanceCard({ reason, drawNo }: { reason: DisturbanceReason;
 }
 
 export function ResultCard(props: {
+  gidB64: string;
   recipient: Member | null;
   note: string;
   meta: GroupMeta;
   drawNo: number;
 }) {
   const [revealed, setRevealed] = useState(false);
+  /** The wish list changed since it was last seen (shown until the card is covered again). */
+  const [updated, setUpdated] = useState(false);
   const name = props.recipient?.name ?? "⚠ unbekannt";
+  const wish = props.recipient?.wish ?? null;
+  // Before revealing: only a hint without any name (someone might look over the shoulder).
+  const pendingUpdate = !revealed && wish !== null && wishUpdated(loadWishSeen(props.gidB64), props.drawNo, wish);
+
+  // Revealed ⇒ the current wish list counts as seen; a live change while revealed is marked too.
+  useEffect(() => {
+    if (!revealed || wish === null) return;
+    if (wishUpdated(loadWishSeen(props.gidB64), props.drawNo, wish)) setUpdated(true);
+    markWishSeen(props.gidB64, props.drawNo, wish);
+  }, [revealed, wish, props.drawNo, props.gidB64]);
+
+  const updatedTag = updated && (
+    <span class="tag tag-gold" data-testid="wish-updated">
+      aktualisiert
+    </span>
+  );
   return (
     <section class="card result-card" aria-labelledby="res-title">
       <h2 id="res-title">Dein Ergebnis</h2>
@@ -223,6 +243,11 @@ export function ResultCard(props: {
       )}
       {!revealed ? (
         <div class="reveal-gate">
+          {pendingUpdate && (
+            <p class="wish-update-hint" role="status">
+              <span class="tag tag-gold">aktualisiert</span> Dein Wichtelkind hat seinen Wunschzettel geändert.
+            </p>
+          )}
           <p>Schau, dass niemand mitliest – dann:</p>
           <button type="button" class="btn btn-primary btn-big" onClick={() => setRevealed(true)}>
             Aufdecken
@@ -250,13 +275,20 @@ export function ResultCard(props: {
               )}
             </div>
           </div>
-          {props.recipient?.wish ? (
-            <div class="result-block">
-              <h3>Wunschzettel von {name}</h3>
-              <p class="pre">{props.recipient.wish}</p>
+          {wish ? (
+            <div class={`result-block${updated ? " wish-updated" : ""}`}>
+              <h3>
+                Wunschzettel von {name}
+                {updatedTag}
+              </h3>
+              {updated && <p class="hint">Seit du zuletzt nachgesehen hast, wurde der Wunschzettel geändert.</p>}
+              <p class="pre">{wish}</p>
             </div>
           ) : (
-            <p class="hint">{name} hat keinen Wunschzettel hinterlegt.</p>
+            <p class="hint">
+              {name} hat keinen Wunschzettel hinterlegt.
+              {updatedTag}
+            </p>
           )}
           {props.note && (
             <div class="result-block private">
@@ -265,7 +297,14 @@ export function ResultCard(props: {
             </div>
           )}
           <p class="hint">Psst: Das Ergebnis siehst nur du. Auch der Spielleiter kennt es nicht.</p>
-          <button type="button" class="btn" onClick={() => setRevealed(false)}>
+          <button
+            type="button"
+            class="btn"
+            onClick={() => {
+              setRevealed(false);
+              setUpdated(false);
+            }}
+          >
             Wieder verdecken
           </button>
         </>
