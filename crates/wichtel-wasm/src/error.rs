@@ -41,6 +41,7 @@ pub const NO_VALID_ATTEMPT: &str = "NO_VALID_ATTEMPT";
 pub const ATTEMPT_MISMATCH: &str = "ATTEMPT_MISMATCH";
 pub const REVEAL_COUNT: &str = "REVEAL_COUNT";
 pub const RNG_UNAVAILABLE: &str = "RNG_UNAVAILABLE";
+pub const CONTACT_COUNT: &str = "CONTACT_COUNT";
 // Codes of this crate.
 /// Wrong JS type/shape of an argument.
 pub const INVALID_ARGUMENT: &str = "INVALID_ARGUMENT";
@@ -66,6 +67,7 @@ impl From<wichtel_core::Error> for WasmError {
             E::AttemptMismatch => ATTEMPT_MISMATCH,
             E::RevealCount => REVEAL_COUNT,
             E::Rng => RNG_UNAVAILABLE,
+            E::ContactCount => CONTACT_COUNT,
         };
         Self {
             code,
@@ -91,6 +93,7 @@ fn core_message(e: wichtel_core::Error) -> &'static str {
         E::AttemptMismatch => "server reported a different t*",
         E::RevealCount => "expected exactly one valid reveal",
         E::Rng => "randomness unavailable",
+        E::ContactCount => "more than one valid contact",
     }
 }
 
@@ -127,6 +130,7 @@ mod tests {
             E::AttemptMismatch,
             E::RevealCount,
             E::Rng,
+            E::ContactCount,
         ];
         let mut codes: Vec<&str> = all.iter().map(|&e| WasmError::from(e).code).collect();
         for e in all {

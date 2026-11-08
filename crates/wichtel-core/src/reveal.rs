@@ -7,7 +7,7 @@ use hpke::{Deserializable, Kem as KemTrait, OpModeR, OpModeS, Serializable};
 use rand_core::Rng;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use crate::dcnet::{OwnPositions, RolesOutcome, apply_pair_masks, round_ctx};
+use crate::dcnet::{OwnPositions, RolesOutcome, RoundCtx, apply_pair_masks, round_ctx};
 use crate::draw::{invert, is_permutation, sigma};
 use crate::keys::{ParticipantKeys, ct_eq};
 use crate::roster::Roster;
@@ -18,7 +18,9 @@ use crate::{
     Error, GroupId, L_CT, L_PT, L_REVEAL_UPLOAD, L_SD, NOTE_MAX, Pid, Result, SLOT_SD, T_ATTEMPTS,
 };
 
-type Kem = X25519HkdfSha256;
+pub(crate) type Kem = X25519HkdfSha256;
+/// HPKE private key of [`Kem`].
+pub(crate) type HpkeSk = <Kem as KemTrait>::PrivateKey;
 
 /// Offsets in the reveal plaintext (Spec §9.2).
 const PT_VERSION: u8 = 0x01;
@@ -27,16 +29,80 @@ const OFF_MAC: usize = 17;
 const OFF_LEN: usize = 49;
 const OFF_NOTE: usize = 51;
 /// HPKE `enc` length.
-const L_ENC: usize = 32;
+pub(crate) const L_ENC: usize = 32;
 
-/// `info = "wichtel/v1/reveal" ‖ G_r ‖ ρ ‖ u8(t)`.
-fn hpke_info(g_r: &[u8; 32], rho: &[u8; 32], t: u8) -> Vec<u8> {
-    let mut info = Vec::with_capacity(17 + 32 + 32 + 1);
-    info.extend_from_slice(b"wichtel/v1/reveal");
+/// HPKE `info = label ‖ G_r ‖ ρ ‖ u8(t)` (label `"wichtel/v1/reveal"`, Spec §9.2, or
+/// `"wichtel/v1/contact"`, Spec §16.2).
+pub(crate) fn hpke_info(label: &[u8], g_r: &[u8; 32], rho: &[u8; 32], t: u8) -> Vec<u8> {
+    let mut info = Vec::with_capacity(label.len() + 32 + 32 + 1);
+    info.extend_from_slice(label);
     info.extend_from_slice(g_r);
     info.extend_from_slice(rho);
     info.push(t);
     info
+}
+
+/// HPKE label of the reveals (Spec §9.2).
+const INFO_REVEAL: &[u8] = b"wichtel/v1/reveal";
+
+/// HPKE single-shot seal in Mode Auth (suite of Spec §9.2) with the ephemeral key pair
+/// `DeriveKeyPair(eph_ikm)`. Returns `enc ‖ ct`.
+pub(crate) fn seal_auth(
+    sk_s: &HpkeSk,
+    pk_r: &[u8; 32],
+    info: &[u8],
+    pt: &[u8],
+    eph_ikm: &[u8; 32],
+) -> Result<Vec<u8>> {
+    let pk_r_hpke =
+        <Kem as KemTrait>::PublicKey::from_bytes(pk_r).map_err(|_| Error::InvalidKey)?;
+    let mut eph_rng = OnceRng::new(eph_ikm);
+    let (enc, ct) = hpke::single_shot_seal_with_rng::<ChaCha20Poly1305, HkdfSha256, Kem>(
+        &OpModeS::Auth((sk_s.clone(), Kem::sk_to_pk(sk_s))),
+        &pk_r_hpke,
+        info,
+        pt,
+        b"",
+        &mut eph_rng,
+    )
+    .map_err(|_| Error::InvalidKey)?;
+    if !eph_rng.consumed_exactly() {
+        return Err(Error::Rng);
+    }
+    let mut out = Vec::with_capacity(L_ENC + ct.len());
+    out.extend_from_slice(&enc.to_bytes());
+    out.extend_from_slice(&ct);
+    Ok(out)
+}
+
+/// HPKE single-shot open in Mode Auth (suite of Spec §9.2) of `c = enc ‖ ct`; `None` on any
+/// failure (wrong sender/recipient/info, tampering, malformed input).
+pub(crate) fn open_auth(
+    sk_r: &HpkeSk,
+    pk_s: &[u8; 32],
+    info: &[u8],
+    c: &[u8],
+) -> Option<SecretVec> {
+    if c.len() < L_ENC {
+        return None;
+    }
+    let pk_s = <Kem as KemTrait>::PublicKey::from_bytes(pk_s).ok()?;
+    let enc = <Kem as KemTrait>::EncappedKey::from_bytes(&c[..L_ENC]).ok()?;
+    hpke::single_shot_open::<ChaCha20Poly1305, HkdfSha256, Kem>(
+        &OpModeR::Auth(pk_s),
+        sk_r,
+        &enc,
+        info,
+        &c[L_ENC..],
+        b"",
+    )
+    .ok()
+    .map(SecretVec)
+}
+
+/// X25519 private key for HPKE from the derived 32 bytes (clamped on use).
+pub(crate) fn hpke_sk(sk: &[u8; 32]) -> Result<HpkeSk> {
+    <Kem as KemTrait>::PrivateKey::from_bytes(sk).map_err(|_| Error::InvalidKey)
 }
 
 /// Claim MAC (Spec §9.2): `dh` is `X25519(rp_r, pkR)` (sender) or `X25519(gp, RP)` (receiver).
@@ -76,7 +142,7 @@ fn plaintext(version: u8, pid: &Pid, mac: &[u8; 32], note: &[u8]) -> Zeroizing<[
 /// depends on the plaintext, different notes never reuse an AEAD key/nonce.
 #[allow(clippy::too_many_arguments)]
 fn seal_reveal(
-    sk_s: &<Kem as KemTrait>::PrivateKey,
+    sk_s: &HpkeSk,
     rng_key: &[u8; 32],
     g_r: &[u8; 32],
     rho: &[u8; 32],
@@ -84,31 +150,20 @@ fn seal_reveal(
     pk_r: &[u8; 32],
     pt: &[u8; L_PT],
 ) -> Result<[u8; L_CT]> {
-    let pk_r_hpke =
-        <Kem as KemTrait>::PublicKey::from_bytes(pk_r).map_err(|_| Error::InvalidKey)?;
     let mut eph_ikm = Zeroizing::new([0u8; 32]);
     hkdf_expand(
         rng_key,
         &[b"wichtel/v1/reveal-eph", &[t], rho, pk_r, &sha256(&[pt])],
         eph_ikm.as_mut(),
     );
-    let mut eph_rng = OnceRng::new(&eph_ikm);
-    let (enc, ct) = hpke::single_shot_seal_with_rng::<ChaCha20Poly1305, HkdfSha256, Kem>(
-        &OpModeS::Auth((sk_s.clone(), Kem::sk_to_pk(sk_s))),
-        &pk_r_hpke,
-        &hpke_info(g_r, rho, t),
+    let c = seal_auth(
+        sk_s,
+        pk_r,
+        &hpke_info(INFO_REVEAL, g_r, rho, t),
         pt,
-        b"",
-        &mut eph_rng,
-    )
-    .map_err(|_| Error::InvalidKey)?;
-    if ct.len() + L_ENC != L_CT || !eph_rng.consumed_exactly() {
-        return Err(Error::InvalidLength);
-    }
-    let mut out = [0u8; L_CT];
-    out[..L_ENC].copy_from_slice(&enc.to_bytes());
-    out[L_ENC..].copy_from_slice(&ct);
-    Ok(out)
+        &eph_ikm,
+    )?;
+    c.try_into().map_err(|_| Error::InvalidLength)
 }
 
 /// Build the step-2 upload body `SD_i ‖ C_{i,1} ‖ … ‖ C_{i,16}` (length `L_REVEAL_UPLOAD`).
@@ -167,8 +222,7 @@ pub fn build_reveal_upload(
     // §9.2 reveals. Placeholders (invalid attempt or failed sealing) come from the stream
     // ChaCha20(padkey, Z(12)) with padkey = Expand(rngkey_r, "wichtel/v1/reveal-pad" ‖ ρ, 32),
     // 560 bytes per placeholder in the order t = 1…16; nothing else consumes this stream.
-    let sk_s = <Kem as KemTrait>::PrivateKey::from_bytes(keys.idh_secret())
-        .map_err(|_| Error::InvalidKey)?;
+    let sk_s = hpke_sk(keys.idh_secret())?;
     let mut pad_key = Zeroizing::new([0u8; 32]);
     hkdf_expand(
         &s.rng_key,
@@ -270,6 +324,57 @@ impl Drop for DrawResult {
 
 impl ZeroizeOnDrop for DrawResult {}
 
+/// The own view of the chosen attempt `t*` (checks shared by Spec §9.3 and §16.2).
+pub(crate) struct Attempt {
+    pub(crate) ctx: RoundCtx,
+    /// `t* − 1`.
+    pub(crate) index: usize,
+    /// `σ_{t*}` (checked to be a permutation of `0…n−1`).
+    pub(crate) sigma: Vec<u16>,
+    /// Own E-position `e` of the recipient, `σ_{t*}(p_{i,t*})` (never the own `e_i`).
+    pub(crate) recipient: usize,
+}
+
+/// Validate `outcome`/`own` against the roster and resolve attempt `t*`.
+///
+/// `Err(AttemptMismatch)` if `t*` is not a valid attempt or if the own giver role would draw
+/// itself in `t*` (impossible for an honest server, since that attempt has a non-zero self-draw
+/// slot).
+pub(crate) fn resolve_attempt(
+    keys: &ParticipantKeys,
+    gid: &GroupId,
+    round: u32,
+    roster: &Roster,
+    outcome: &RolesOutcome,
+    own: &OwnPositions,
+    t_star: u8,
+) -> Result<Attempt> {
+    let ctx = round_ctx(keys, gid, round, roster)?;
+    let n = roster.len();
+    check_outcome(outcome, own, n)?;
+    if !(1..=T_ATTEMPTS as u8).contains(&t_star) {
+        return Err(Error::AttemptMismatch);
+    }
+    let index = usize::from(t_star - 1);
+    let (Some(_), Some(p)) = (&outcome.givers[index], own.p[index]) else {
+        return Err(Error::AttemptMismatch);
+    };
+    let sig = sigma(&outcome.rho, t_star, n);
+    if !is_permutation(&sig) {
+        return Err(Error::AttemptMismatch);
+    }
+    let recipient = usize::from(sig[p]);
+    if recipient == own.e {
+        return Err(Error::AttemptMismatch);
+    }
+    Ok(Attempt {
+        ctx,
+        index,
+        sigma: sig,
+        recipient,
+    })
+}
+
 /// Open the released reveals of attempt `t*` (Spec §9.3). `reveals` = `(uploader pid, C_{j,t*})`.
 /// Requires exactly one valid reveal (else `Err(RevealCount)`).
 ///
@@ -288,32 +393,15 @@ pub fn open_result(
     t_star: u8,
     reveals: &[(Pid, Vec<u8>)],
 ) -> Result<DrawResult> {
-    let ctx = round_ctx(keys, gid, round, roster)?;
-    let n = roster.len();
-    check_outcome(outcome, own, n)?;
-    if !(1..=T_ATTEMPTS as u8).contains(&t_star) {
-        return Err(Error::AttemptMismatch);
-    }
-    let i = usize::from(t_star - 1);
-    let (Some(_), Some(p)) = (&outcome.givers[i], own.p[i]) else {
-        return Err(Error::AttemptMismatch);
-    };
-    let sig = sigma(&outcome.rho, t_star, n);
-    if !is_permutation(&sig) {
-        return Err(Error::AttemptMismatch);
-    }
-    let e = usize::from(sig[p]);
-    if e == own.e {
-        return Err(Error::AttemptMismatch);
-    }
+    let a = resolve_attempt(keys, gid, round, roster, outcome, own, t_star)?;
+    let (ctx, i, e) = (&a.ctx, a.index, a.recipient);
     let s = &ctx.secrets;
     let rp_e = outcome.recipients[e];
     let gp_pub = s.gp_pub[i];
     let dh = x25519_checked(&s.gp[i], &rp_e)?;
-    let sk_r =
-        <Kem as KemTrait>::PrivateKey::from_bytes(&s.gp[i]).map_err(|_| Error::InvalidKey)?;
+    let sk_r = hpke_sk(&s.gp[i])?;
     let rho = &outcome.rho;
-    let info = hpke_info(&ctx.g_r, rho, t_star);
+    let info = hpke_info(INFO_REVEAL, &ctx.g_r, rho, t_star);
 
     let mut found: Option<DrawResult> = None;
     let mut valid = 0usize;
@@ -342,7 +430,7 @@ fn try_open(
     dh: &[u8; 32],
     rp_e: &[u8; 32],
     gp_pub: &[u8; 32],
-    sk_r: &<Kem as KemTrait>::PrivateKey,
+    sk_r: &HpkeSk,
     info: &[u8],
     roster: &Roster,
     pid_j: &Pid,
@@ -352,19 +440,7 @@ fn try_open(
         return None;
     }
     let sender = &roster.entries()[roster.index_of(pid_j)?];
-    let pk_s = <Kem as KemTrait>::PublicKey::from_bytes(&sender.idh).ok()?;
-    let enc = <Kem as KemTrait>::EncappedKey::from_bytes(&c[..L_ENC]).ok()?;
-    let pt = SecretVec(
-        hpke::single_shot_open::<ChaCha20Poly1305, HkdfSha256, Kem>(
-            &OpModeR::Auth(pk_s),
-            sk_r,
-            &enc,
-            info,
-            &c[L_ENC..],
-            b"",
-        )
-        .ok()?,
-    );
+    let pt = open_auth(sk_r, &sender.idh, info, c)?;
     if pt.len() != L_PT || pt[0] != PT_VERSION || pt[OFF_PID..OFF_MAC] != pid_j.0 {
         return None;
     }
@@ -384,27 +460,27 @@ fn try_open(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::dcnet::{build_roles_vector, evaluate_roles, own_positions, xor_into};
     use crate::roles_vector_len;
     use crate::roster::{RosterEntry, group_context};
 
     /// A finished 4-person round (step 1 and step 2 uploads), searched deterministically.
-    struct Fixture {
-        gid: GroupId,
-        round: u32,
-        keys: Vec<ParticipantKeys>,
-        roster: Roster,
-        outcome: RolesOutcome,
-        own: Vec<OwnPositions>,
-        uploads: Vec<Vec<u8>>,
-        t_star: u8,
+    pub(crate) struct Fixture {
+        pub(crate) gid: GroupId,
+        pub(crate) round: u32,
+        pub(crate) keys: Vec<ParticipantKeys>,
+        pub(crate) roster: Roster,
+        pub(crate) outcome: RolesOutcome,
+        pub(crate) own: Vec<OwnPositions>,
+        pub(crate) uploads: Vec<Vec<u8>>,
+        pub(crate) t_star: u8,
     }
 
     const NOTE: &str = "Paket bitte an die Packstation";
 
-    fn fixture() -> Fixture {
+    pub(crate) fn fixture() -> Fixture {
         let gid = GroupId([0x42; 16]);
         let keys: Vec<_> = (0..4)
             .map(|i| ParticipantKeys::derive(&[i as u8 + 0x10; 32], &gid).unwrap())
@@ -489,7 +565,7 @@ mod tests {
         }
 
         /// Index of the participant that giver `i` gives to in attempt `t*`.
-        fn recipient_of(&self, i: usize) -> usize {
+        pub(crate) fn recipient_of(&self, i: usize) -> usize {
             let ti = usize::from(self.t_star - 1);
             let s = sigma(&self.outcome.rho, self.t_star, 4);
             let e = usize::from(s[self.own[i].p[ti].unwrap()]);
